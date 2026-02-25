@@ -45,7 +45,7 @@
   body::after {
     content:'';
     position:fixed; inset:0;
-    background: radial-gradient(ellipse at center, transparent 35%, rgba(0,0,0,0.9) 100%);
+    background: radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.35) 100%);
     pointer-events:none; z-index:999;
   }
 
@@ -289,6 +289,22 @@
   .nline { position:fixed; left:0; right:0; height:1px; background:rgba(201,168,76,0.15); pointer-events:none; z-index:997; opacity:0; animation:nline 14s linear infinite; }
   @keyframes nline{0%{top:-1px;opacity:0;}2%{opacity:0.15;}98%{opacity:0.04;}100%{top:100vh;opacity:0;}}
 
+  .frag-address { font-size:0.78rem; letter-spacing:0.06em; color:var(--gold-dim); margin-bottom:0.25rem; min-height:1rem; }
+
+  .place-photo-wrap { margin-bottom:1.2rem; display:none; }
+  .place-photo-wrap.on { display:block; }
+  .place-photo {
+    width:100%; max-height:180px; object-fit:cover;
+    filter:brightness(0.85) saturate(0.7);
+    border:1px solid #2a2418;
+    display:block;
+  }
+  .place-photo-caption {
+    font-size:0.68rem; letter-spacing:0.08em; color:var(--muted);
+    padding:0.35rem 0.5rem; border:1px solid #1e1c18; border-top:none;
+    background:#0e0d0b; line-height:1.5;
+  }
+
   /* ══ MAPPA ══ */
   .map-section {
     border-top: 1px solid #131210;
@@ -471,6 +487,7 @@
       <div class="frag-num-box" id="frag-n">—</div>
       <div class="frag-meta-col">
         <div class="frag-place" id="frag-place">In attesa di segnale...</div>
+        <div class="frag-address" id="frag-address"></div>
         <div class="frag-coords-lbl" id="frag-coords"></div>
       </div>
     </div>
@@ -479,6 +496,8 @@
       <div class="gen-d"></div><div class="gen-d"></div><div class="gen-d"></div>
       <span>ricerca e narrazione in corso</span>
     </div>
+
+    <div class="place-photo-wrap" id="place-photo-wrap"></div>
 
     <div class="story-text" id="story-text">
       <span style="color:var(--muted)">Quando il GPS sarà pronto, la storia del luogo emergerà dalla terra.</span>
@@ -933,6 +952,49 @@ async function fetchHistoricalData(lat,lon) {
 }
 
 // ══════════════════════════════════════════════
+// INDIRIZZO INVERSO
+// ══════════════════════════════════════════════
+async function fetchAddress(lat, lon) {
+  try {
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=it`);
+    const d = await r.json();
+    const a = d.address || {};
+    const parts = [];
+    if (a.road) parts.push(a.road + (a.house_number ? ' ' + a.house_number : ''));
+    else if (a.pedestrian) parts.push(a.pedestrian);
+    else if (a.suburb) parts.push(a.suburb);
+    if (a.quarter && !parts[0]?.includes(a.quarter)) parts.push(a.quarter);
+    else if (a.neighbourhood && !parts[0]?.includes(a.neighbourhood)) parts.push(a.neighbourhood);
+    return parts.slice(0,2).join(', ') || '';
+  } catch(e) { return ''; }
+}
+
+// ══════════════════════════════════════════════
+// FOTO DA WIKIMEDIA COMMONS
+// ══════════════════════════════════════════════
+async function fetchPlacePhoto(lat, lon) {
+  try {
+    const r = await fetch(`https://commons.wikimedia.org/w/api.php?action=query&list=geosearch&gscoord=${lat}|${lon}&gsradius=500&gslimit=10&gsnamespace=6&format=json&origin=*`);
+    const d = await r.json();
+    const items = (d.query?.geosearch || []).filter(i => {
+      const t = i.title.toLowerCase();
+      return !t.includes('logo') && !t.includes('coat') && !t.includes('flag') && !t.includes('icon') && !t.includes('map') && !t.includes('plan') && (t.endsWith('.jpg') || t.endsWith('.jpeg') || t.endsWith('.png') || t.endsWith('.webp'));
+    });
+    if (items.length === 0) return null;
+    const pick = items[0];
+    const ir = await fetch(`https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent(pick.title)}&prop=imageinfo&iiprop=url|extmetadata&iiurlwidth=800&format=json&origin=*`);
+    const id = await ir.json();
+    const page = Object.values(id.query?.pages || {})[0];
+    if (!page?.imageinfo?.[0]) return null;
+    const info = page.imageinfo[0];
+    const url = info.thumburl || info.url;
+    const desc = info.extmetadata?.ImageDescription?.value?.replace(/<[^>]*>/g,'').slice(0,80) || pick.title.replace('File:','').replace(/\.[^.]+$/,'');
+    const author = info.extmetadata?.Artist?.value?.replace(/<[^>]*>/g,'').slice(0,40) || '';
+    return { url, caption: desc + (author ? ' · ' + author : '') };
+  } catch(e) { return null; }
+}
+
+// ══════════════════════════════════════════════
 // GENERAZIONE
 // ══════════════════════════════════════════════
 async function generateFrag(lat,lon,reason) {
@@ -940,9 +1002,26 @@ async function generateFrag(lat,lon,reason) {
   document.getElementById('gen-wrap').classList.add('on');
   document.getElementById('story-text').innerHTML='';
   document.getElementById('sources-wrap').classList.remove('on');
+  document.getElementById('place-photo-wrap').classList.remove('on');
+  document.getElementById('place-photo-wrap').innerHTML='';
   document.getElementById('frag-n').textContent=S.fragCount;
   document.getElementById('frag-place').textContent='Ricerca in corso...';
+  document.getElementById('frag-address').textContent='';
   document.getElementById('frag-coords').textContent=`${lat.toFixed(4)}°N ${lon.toFixed(4)}°E`;
+
+  // Fetch address in parallelo (leggero, sempre utile)
+  fetchAddress(lat, lon).then(addr => {
+    if (addr) document.getElementById('frag-address').textContent = addr;
+  });
+  // Fetch foto in parallelo (non blocca)
+  fetchPlacePhoto(lat, lon).then(photo => {
+    if (photo) {
+      document.getElementById('place-photo-wrap').innerHTML =
+        `<img class="place-photo" src="${photo.url}" alt="${photo.caption}" loading="lazy" onerror="this.parentElement.classList.remove('on')">` +
+        `<div class="place-photo-caption">${photo.caption}</div>`;
+      document.getElementById('place-photo-wrap').classList.add('on');
+    }
+  });
 
   // ── CACHE CHECK ──
   const cacheKey = `strati_${lat.toFixed(3)}_${lon.toFixed(3)}`;
