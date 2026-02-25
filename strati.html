@@ -160,20 +160,12 @@
   }
   @keyframes gps-pulse{0%,100%{opacity:1;}50%{opacity:0.4;}}
 
-  #panic-btn {
-    padding:0.6rem 1rem; background:transparent; border:1px solid #2a2820;
-    color:var(--muted); font-family:'IBM Plex Mono',monospace;
-    font-size:var(--fs-sm); letter-spacing:0.12em; text-transform:uppercase; cursor:pointer; transition:all 0.3s;
-    min-height:44px; min-width:44px;
-  }
-  #panic-btn:hover { border-color:var(--red); color:var(--red); }
-
   .coord-strip {
     padding:0.6rem 1.5rem; border-bottom:1px solid #131210;
-    display:flex; justify-content:space-between; align-items:center;
-    font-size:var(--fs-sm); letter-spacing:0.1em; color:var(--muted);
+    display:flex; align-items:center;
+    font-size:var(--fs-sm); letter-spacing:0.06em; color:var(--muted);
+    font-style: italic;
   }
-  .coord-strip span { color:var(--text); }
 
   .stats-row {
     display:flex; justify-content:space-around;
@@ -280,11 +272,7 @@
   #flash { position:fixed; inset:0; background:rgba(201,168,76,0.03); pointer-events:none; z-index:998; opacity:0; transition:opacity 0.08s; }
   #flash.on { opacity:1; }
 
-  #panic-overlay { display:none; position:fixed; inset:0; background:#fff; z-index:9999; flex-direction:column; align-items:center; justify-content:center; font-family:'IBM Plex Mono',monospace; }
-  #panic-overlay.visible { display:flex; }
-  .panic-t { color:#333; font-size:1rem; letter-spacing:0.1em; }
-  .panic-s { color:#999; font-size:0.72rem; margin-top:0.5rem; }
-  .resume-btn { margin-top:2rem; padding:0.8rem 2rem; background:#333; border:none; color:#fff; font-family:'IBM Plex Mono',monospace; font-size:0.78rem; letter-spacing:0.2em; cursor:pointer; }
+  
 
   .nline { position:fixed; left:0; right:0; height:1px; background:rgba(201,168,76,0.15); pointer-events:none; z-index:997; opacity:0; animation:nline 14s linear infinite; }
   @keyframes nline{0%{top:-1px;opacity:0;}2%{opacity:0.15;}98%{opacity:0.04;}100%{top:100vh;opacity:0;}}
@@ -447,14 +435,11 @@
     <div class="app-title">STRATI</div>
     <div class="hdr-right">
       <span><span class="gps-dot" id="gps-dot"></span><span id="gps-txt">attesa</span></span>
-      <button id="panic-btn" onclick="panic()">PANIC</button>
     </div>
   </header>
 
   <div class="coord-strip">
-    <span id="coord-lat">—° N</span>
-    <span id="coord-lon">—° E</span>
-    <span id="coord-acc">±—m</span>
+    <span id="addr-strip">—</span>
   </div>
 
   <div class="stats-row">
@@ -538,11 +523,6 @@
 </div>
 
 <!-- PANIC -->
-<div id="panic-overlay">
-  <div class="panic-t">Sei al sicuro.</div>
-  <div class="panic-s">L'app è in pausa.</div>
-  <button class="resume-btn" onclick="resumeApp()">Continua</button>
-</div>
 
 <!-- FINE SESSIONE -->
 <div id="end-overlay">
@@ -806,9 +786,6 @@ function onPos(pos) {
   const { latitude:lat, longitude:lon, accuracy, speed } = pos.coords;
   document.getElementById('gps-dot').classList.add('lock');
   document.getElementById('gps-txt').textContent=`±${Math.round(accuracy)}m`;
-  document.getElementById('coord-lat').textContent=`${lat.toFixed(4)}° N`;
-  document.getElementById('coord-lon').textContent=`${lon.toFixed(4)}° E`;
-  document.getElementById('coord-acc').textContent=`±${Math.round(accuracy)}m`;
   S.currentPos={lat,lon};
   // Traccia percorso per mappa
   S.pathCoords.push([lat,lon]);
@@ -819,6 +796,7 @@ function onPos(pos) {
 
   if (!S.gpsReady) {
     S.gpsReady=true; S.lastPos={lat,lon};
+    fetchAddress(lat, lon); // aggiorna strip indirizzo al primo fix
     triggerFrag(lat,lon,'primo_fix'); return;
   }
 
@@ -947,6 +925,31 @@ async function fetchHistoricalData(lat,lon) {
     }
   } catch(e) {}
 
+  // 6. Wikidata — luoghi storici con coordinate e descrizione
+  setSearchStatus(true,'Ricerca su Wikidata...');
+  try {
+    const sparql = `SELECT ?item ?itemLabel ?description ?inception ?coords WHERE {
+      SERVICE wikibase:around { ?item wdt:P625 ?coords. bd:serviceParam wikibase:center "Point(${lon} ${lat})"^^geo:wktLiteral. bd:serviceParam wikibase:radius "0.4". }
+      OPTIONAL { ?item schema:description ?description. FILTER(LANG(?description)="it" || LANG(?description)="en") }
+      OPTIONAL { ?item wdt:P571 ?inception. }
+      SERVICE wikibase:label { bd:serviceParam wikibase:language "it,en". }
+    } LIMIT 5`;
+    const wr = await fetch('https://query.wikidata.org/sparql?query='+encodeURIComponent(sparql), {
+      headers:{'Accept':'application/sparql-results+json','User-Agent':'Strati/1.0'}
+    });
+    const wd = await wr.json();
+    for (const row of (wd.results?.bindings||[]).slice(0,4)) {
+      const name = row.itemLabel?.value;
+      const desc = row.description?.value;
+      const year = row.inception?.value ? new Date(row.inception.value).getFullYear() : null;
+      const qid = row.item?.value?.split('/').pop();
+      if (name && name !== qid && !wikiData.find(w=>w.title===name)) {
+        wikiData.push({ title:name, extract:(desc||'')+(year?` (${year})`:''), dist:0, url:`https://www.wikidata.org/wiki/${qid}`, lang:'wd' });
+        if (desc) sources.push({ label:name+' (Wikidata)', url:`https://www.wikidata.org/wiki/${qid}` });
+      }
+    }
+  } catch(e) {}
+
   setSearchStatus(false,'');
   return { wikiData, osmData, sources };
 }
@@ -956,41 +959,47 @@ async function fetchHistoricalData(lat,lon) {
 // ══════════════════════════════════════════════
 async function fetchAddress(lat, lon) {
   try {
-    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=it`);
+    const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=it&zoom=17`);
     const d = await r.json();
     const a = d.address || {};
-    const parts = [];
-    if (a.road) parts.push(a.road + (a.house_number ? ' ' + a.house_number : ''));
-    else if (a.pedestrian) parts.push(a.pedestrian);
-    else if (a.suburb) parts.push(a.suburb);
-    if (a.quarter && !parts[0]?.includes(a.quarter)) parts.push(a.quarter);
-    else if (a.neighbourhood && !parts[0]?.includes(a.neighbourhood)) parts.push(a.neighbourhood);
-    return parts.slice(0,2).join(', ') || '';
+    const road = a.road || a.pedestrian || a.footway || a.path || '';
+    const num = a.house_number ? ' ' + a.house_number : '';
+    const addr = road ? road + num : '';
+    if (addr) {
+      const strip = document.getElementById('addr-strip');
+      if (strip) strip.textContent = addr;
+    }
+    return addr;
   } catch(e) { return ''; }
 }
 
 // ══════════════════════════════════════════════
-// FOTO DA WIKIMEDIA COMMONS
+// FOTO DA WIKIPEDIA (immagine articolo più vicino)
 // ══════════════════════════════════════════════
 async function fetchPlacePhoto(lat, lon) {
   try {
-    const r = await fetch(`https://commons.wikimedia.org/w/api.php?action=query&list=geosearch&gscoord=${lat}|${lon}&gsradius=500&gslimit=10&gsnamespace=6&format=json&origin=*`);
-    const d = await r.json();
-    const items = (d.query?.geosearch || []).filter(i => {
-      const t = i.title.toLowerCase();
-      return !t.includes('logo') && !t.includes('coat') && !t.includes('flag') && !t.includes('icon') && !t.includes('map') && !t.includes('plan') && (t.endsWith('.jpg') || t.endsWith('.jpeg') || t.endsWith('.png') || t.endsWith('.webp'));
-    });
-    if (items.length === 0) return null;
-    const pick = items[0];
-    const ir = await fetch(`https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent(pick.title)}&prop=imageinfo&iiprop=url|extmetadata&iiurlwidth=800&format=json&origin=*`);
-    const id = await ir.json();
-    const page = Object.values(id.query?.pages || {})[0];
-    if (!page?.imageinfo?.[0]) return null;
-    const info = page.imageinfo[0];
-    const url = info.thumburl || info.url;
-    const desc = info.extmetadata?.ImageDescription?.value?.replace(/<[^>]*>/g,'').slice(0,80) || pick.title.replace('File:','').replace(/\.[^.]+$/,'');
-    const author = info.extmetadata?.Artist?.value?.replace(/<[^>]*>/g,'').slice(0,40) || '';
-    return { url, caption: desc + (author ? ' · ' + author : '') };
+    // Cerca gli articoli Wikipedia più vicini (prima IT poi EN)
+    const langs = ['it','en'];
+    for (const lang of langs) {
+      const r = await fetch(`https://${lang}.wikipedia.org/w/api.php?action=query&list=geosearch&gscoord=${lat}|${lon}&gsradius=600&gslimit=6&format=json&origin=*`);
+      const d = await r.json();
+      const results = d.query?.geosearch || [];
+      for (const item of results) {
+        // Prendi la pageimage (thumbnail principale dell'articolo)
+        const r2 = await fetch(`https://${lang}.wikipedia.org/w/api.php?action=query&pageids=${item.pageid}&prop=pageimages&piprop=thumbnail&pithumbsize=800&format=json&origin=*`);
+        const d2 = await r2.json();
+        const page = d2.query?.pages?.[item.pageid];
+        const imgUrl = page?.thumbnail?.source;
+        if (!imgUrl) continue;
+        // Filtra immagini non pertinenti
+        const u = imgUrl.toLowerCase();
+        const bad = ['logo','flag','coat','wappen','blason','map','schema','plan','icon','picto','symbol','portrait','person','face','.svg'];
+        if (bad.some(b => u.includes(b))) continue;
+        // Controlla proporzioni: deve sembrare una foto di luogo (landscape/square, non verticale stretta)
+        return { url: imgUrl, caption: item.title };
+      }
+    }
+    return null;
   } catch(e) { return null; }
 }
 
@@ -1053,7 +1062,7 @@ async function generateFrag(lat,lon,reason) {
   try { histData=await fetchHistoricalData(lat,lon); } catch(e){}
 
   const systemPrompt = `Sei una guida narrativa storica che racconta la storia dei luoghi mentre qualcuno cammina.
-Ricevi dati reali da Wikipedia e OpenStreetMap e li trasformi in narrazione coinvolgente.
+Ricevi dati reali da Wikipedia, Wikidata e OpenStreetMap e li trasformi in narrazione coinvolgente.
 
 FORMATO — rispondi SOLO con JSON valido, nient'altro:
 {
@@ -1207,8 +1216,7 @@ function startApp() {
   },1500);
 }
 
-function panic() { stopAudio(); setAudioUI(false); document.getElementById('panic-overlay').classList.add('visible'); }
-function resumeApp() { document.getElementById('panic-overlay').classList.remove('visible'); }
+
 
 setInterval(()=>document.getElementById('s-time').textContent=timeStr(),60000);
 if(window.speechSynthesis) window.speechSynthesis.onvoiceschanged=()=>{};
