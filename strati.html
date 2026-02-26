@@ -696,14 +696,7 @@
 <div id="flash"></div>
 <audio id="strati-audio" preload="none" style="display:none"></audio>
 
-<!-- DEBUG AUDIO PANEL -->
-<div id="debug-panel" style="display:block;position:fixed;bottom:0;left:0;right:0;background:#0a0a08;border-top:2px solid #c9a84c;padding:0.6rem 1rem;z-index:9999;font-family:monospace;font-size:0.68rem;color:#c9a84c;max-height:160px;overflow-y:auto;">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.3rem;">
-    <b>🔊 AUDIO DEBUG</b>
-    <span style="cursor:pointer;color:#888;padding:0 0.3rem;" onclick="this.closest('#debug-panel').style.display='none'">✕</span>
-  </div>
-  <div id="debug-log" style="line-height:1.8;"></div>
-</div>
+
 
 <script>
 // ══════════════════════════════════════════════
@@ -907,7 +900,7 @@ function _doSpeak(text, section, speakId) {
   const voice = _resolveVoice();
   const u = new SpeechSynthesisUtterance(text.replace(/\n+/g, '. ').replace(/\s+/g, ' ').trim());
   u.lang = 'it-IT';
-  u.rate = 0.92;
+  u.rate = 1.1;
   u.pitch = 0.75;  // tono basso
   u.volume = 0.9;
   if (voice) u.voice = voice; // imposta Federica se trovata
