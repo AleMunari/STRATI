@@ -527,6 +527,11 @@
     <span class="epoch-value" id="epoch-val">in ricerca...</span>
   </div>
 
+  <div id="el-warning" style="display:none;background:#1a1208;border-bottom:1px solid #5a4010;padding:0.6rem 1.5rem;font-size:0.78rem;color:#c09050;letter-spacing:0.06em;line-height:1.7;">
+    ⚠ ElevenLabs non disponibile — narrazione con voce di sistema.
+    <span style="color:var(--muted);font-size:0.72rem;display:block;">Causa: account free bloccato o quota esaurita. Ricarica la pagina per reinserire la chiave.</span>
+  </div>
+
   <div class="search-status" id="search-status">
     <div class="search-dot" id="search-dot"></div>
     <span id="search-txt">GPS in calibrazione — comincia a camminare</span>
@@ -958,12 +963,26 @@ function speakText(text) {
         voice_settings: { stability: 0.5, similarity_boost: 0.78, style: 0.3, use_speaker_boost: true }
       })
     })
-    .then(r => {
+    .then(async r => {
       dbg('EL HTTP ' + r.status);
       if (!r.ok) {
         if (r.status === 401 || r.status === 403) {
-          dbg('EL chiave non valida — disabilitata per questa sessione', '#f0a030');
-          S.elKey = null; // Non riprovare EL finché non viene reinserita
+          // Leggi il body per capire il motivo reale
+          try {
+            const errBody = await r.json();
+            const status = errBody?.detail?.status || '';
+            const msg = errBody?.detail?.message || '';
+            if (status === 'detected_unusual_activity') {
+              dbg('EL: attività insolita rilevata (free tier + browser). Usa piano a pagamento per EL.', '#f0a030');
+            } else if (status === 'quota_exceeded') {
+              dbg('EL: quota mensile esaurita', '#f0a030');
+            } else {
+              dbg('EL: ' + (status || 'chiave non valida'), '#f0a030');
+            }
+          } catch(e) {}
+          S.elKey = null; // Disabilita EL per questa sessione → usa voce sistema
+          const w = document.getElementById('el-warning');
+          if (w) w.style.display = 'block';
         }
         throw new Error('HTTP ' + r.status);
       }
@@ -996,7 +1015,10 @@ function speakText(text) {
     })
     .catch(err => {
       if (btn) btn.classList.remove('loading');
-      dbg('✗ fetch: ' + err.message, '#c03030');
+      dbg('✗ fetch: ' + err.message + ' → voce sistema', '#c03030');
+      // Ferma il silent loop prima di usare speechSynthesis
+      const a2 = S._audioEl;
+      if (a2 && a2.loop) { try { a2.pause(); } catch(e) {} }
       speakWithSystem(text);
     });
   } else {
