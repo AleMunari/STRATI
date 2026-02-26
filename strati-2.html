@@ -255,7 +255,7 @@
   .source-tag:hover { color:var(--gold); }
 
   .audio-btn {
-    margin-top:2rem; width:100%; padding:1.2rem; background:transparent;
+    width:100%; padding:1.2rem; background:transparent;
     border:1px solid #1e1c18; color:var(--muted);
     font-family:'IBM Plex Mono',monospace; font-size:var(--fs-base);
     letter-spacing:0.15em; text-transform:uppercase; cursor:pointer; transition:all 0.3s;
@@ -265,6 +265,28 @@
   .audio-btn:hover { border-color:var(--gold-dim); color:var(--text); }
   .audio-btn.speaking { border-color:var(--gold); color:var(--gold); animation:ab-pulse 2s ease-in-out infinite; }
   .audio-btn.loading { color:#2a2820; border-color:#1e1c18; }
+
+  .audio-controls { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 2rem; }
+  .audio-active-btns { display: flex; gap: 0.5rem; }
+  .audio-ctrl-btn {
+    flex: 1; padding: 0.8rem 0.5rem; background: transparent;
+    border: 1px solid #1e1c18; color: var(--muted);
+    font-family: 'IBM Plex Mono', monospace; font-size: 0.82rem;
+    letter-spacing: 0.12em; cursor: pointer; transition: all 0.3s;
+    min-height: 48px;
+  }
+  .audio-ctrl-btn:hover { border-color: var(--gold-dim); color: var(--text); }
+  .audio-stop-btn:hover { border-color: var(--red); color: var(--red); }
+
+  .appr-ctrl-group { display: flex; gap: 0.4rem; margin-left: auto; flex-shrink: 0; }
+  .appr-pause-btn, .appr-stop-btn {
+    background: transparent; border: 1px solid #2a2418; color: var(--gold-dim);
+    font-size: 0.75rem; padding: 0.25rem 0.6rem; cursor: pointer;
+    transition: all 0.25s; min-height: 28px; min-width: 32px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+  .appr-pause-btn:hover { border-color: var(--gold); color: var(--gold); }
+  .appr-stop-btn:hover { border-color: var(--red); color: var(--red); }
   @keyframes ab-pulse{0%,100%{box-shadow:0 0 0 0 rgba(201,168,76,0);}50%{box-shadow:0 0 0 8px rgba(201,168,76,0.06);}}
 
   .history-wrap { padding:0 1.5rem 3rem; border-top:1px solid #0f0e0c; }
@@ -677,10 +699,16 @@
       <div id="sources-list"></div>
     </div>
 
-    <button class="audio-btn" id="audio-btn" onclick="speakCurrent()">
-      <span id="audio-icon">▶</span>
-      <span id="audio-lbl">Ascolta narrazione</span>
-    </button>
+    <div class="audio-controls" id="audio-controls">
+      <button class="audio-btn audio-play-btn" id="audio-btn" onclick="speakCurrent()">
+        <span id="audio-icon">▶</span>
+        <span id="audio-lbl">Ascolta narrazione</span>
+      </button>
+      <div class="audio-active-btns" id="audio-active-btns" style="display:none;">
+        <button class="audio-ctrl-btn" id="audio-pause-btn" onclick="pauseResumeAudio()">⏸ Pausa</button>
+        <button class="audio-ctrl-btn audio-stop-btn" onclick="stopAllAudio()">■ Termina</button>
+      </div>
+    </div>
 
     <button class="approfondisci-btn" id="approfondisci-btn" onclick="approfondisci()" style="display:none;">
       <span id="approfondisci-icon">✦</span>
@@ -691,28 +719,44 @@
       <div class="approfondimento-section" id="app-cronologia" style="display:none;">
         <div class="approfondimento-lbl">
           Cronologia
-          <button class="appr-play-btn" id="play-cronologia" onclick="speakSection('cronologia')" title="Ascolta">▶</button>
+          <div class="appr-ctrl-group" id="ctrl-cronologia">
+            <button class="appr-play-btn" id="play-cronologia" onclick="speakSection('cronologia')">▶</button>
+            <button class="appr-pause-btn" id="pause-cronologia" onclick="pauseResumeAudio()" style="display:none;">⏸</button>
+            <button class="appr-stop-btn" id="stop-cronologia" onclick="stopAllAudio()" style="display:none;">■</button>
+          </div>
         </div>
         <div class="approfondimento-text" id="app-cronologia-text"></div>
       </div>
       <div class="approfondimento-section" id="app-personaggi" style="display:none;">
         <div class="approfondimento-lbl">
           Personaggi
-          <button class="appr-play-btn" id="play-personaggi" onclick="speakSection('personaggi')" title="Ascolta">▶</button>
+          <div class="appr-ctrl-group" id="ctrl-personaggi">
+            <button class="appr-play-btn" id="play-personaggi" onclick="speakSection('personaggi')">▶</button>
+            <button class="appr-pause-btn" id="pause-personaggi" onclick="pauseResumeAudio()" style="display:none;">⏸</button>
+            <button class="appr-stop-btn" id="stop-personaggi" onclick="stopAllAudio()" style="display:none;">■</button>
+          </div>
         </div>
         <div class="approfondimento-text" id="app-personaggi-text"></div>
       </div>
       <div class="approfondimento-section" id="app-connessioni" style="display:none;">
         <div class="approfondimento-lbl">
           Luoghi connessi
-          <button class="appr-play-btn" id="play-connessioni" onclick="speakSection('connessioni')" title="Ascolta">▶</button>
+          <div class="appr-ctrl-group" id="ctrl-connessioni">
+            <button class="appr-play-btn" id="play-connessioni" onclick="speakSection('connessioni')">▶</button>
+            <button class="appr-pause-btn" id="pause-connessioni" onclick="pauseResumeAudio()" style="display:none;">⏸</button>
+            <button class="appr-stop-btn" id="stop-connessioni" onclick="stopAllAudio()" style="display:none;">■</button>
+          </div>
         </div>
         <div class="approfondimento-text" id="app-connessioni-text"></div>
       </div>
       <div class="approfondimento-section" id="app-aneddoti" style="display:none;">
         <div class="approfondimento-lbl">
           Aneddoti
-          <button class="appr-play-btn" id="play-aneddoti" onclick="speakSection('aneddoti')" title="Ascolta">▶</button>
+          <div class="appr-ctrl-group" id="ctrl-aneddoti">
+            <button class="appr-play-btn" id="play-aneddoti" onclick="speakSection('aneddoti')">▶</button>
+            <button class="appr-pause-btn" id="pause-aneddoti" onclick="pauseResumeAudio()" style="display:none;">⏸</button>
+            <button class="appr-stop-btn" id="stop-aneddoti" onclick="stopAllAudio()" style="display:none;">■</button>
+          </div>
         </div>
         <div class="approfondimento-text" id="app-aneddoti-text"></div>
       </div>
@@ -925,6 +969,7 @@ async function callOpenAI(systemPrompt, userPrompt) {
 let _currentSpeakId = 0;
 let _currentSection = null;
 let _iosVoice = null; // voce italiana scelta, cachata
+let _paused = false;
 
 // Trova e cacha la miglior voce italiana disponibile
 function _resolveVoice() {
@@ -953,26 +998,67 @@ function _listVoices() {
 
 function stopAllAudio() {
   _currentSpeakId++;
-  if (window.speechSynthesis) window.speechSynthesis.cancel();
+  _paused = false;
+  if (window.speechSynthesis) { window.speechSynthesis.cancel(); }
   _setAllUI(false);
   _currentSection = null;
 }
 
-function _setAllUI(on, section) {
-  const btn = document.getElementById('audio-btn');
-  if (btn) {
-    btn.classList.toggle('speaking', on && section === 'main');
-    btn.classList.remove('loading');
-    document.getElementById('audio-icon').textContent = (on && section === 'main') ? '■' : '▶';
-    document.getElementById('audio-lbl').textContent = (on && section === 'main') ? 'In riproduzione — tocca per fermare' : 'Ascolta narrazione';
+function pauseResumeAudio() {
+  const synth = window.speechSynthesis;
+  if (!synth || !S.isSpeaking) return;
+  if (_paused) {
+    _paused = false;
+    synth.resume();
+    _setAllUI(true, _currentSection, false);
+  } else {
+    _paused = true;
+    synth.pause();
+    _setAllUI(true, _currentSection, true);
   }
+}
+
+function _setAllUI(on, section, paused) {
+  // ── Pulsante principale ──
+  const btn = document.getElementById('audio-btn');
+  const activeBtns = document.getElementById('audio-active-btns');
+  const pauseBtn = document.getElementById('audio-pause-btn');
+  if (btn && activeBtns) {
+    const isMain = on && section === 'main';
+    btn.classList.toggle('speaking', isMain && !paused);
+    btn.classList.remove('loading');
+    if (isMain) {
+      // In riproduzione: mostra pulsanti pausa/stop, nasconde il play
+      btn.style.display = 'none';
+      activeBtns.style.display = 'flex';
+      if (pauseBtn) pauseBtn.textContent = paused ? '▶ Riprendi' : '⏸ Pausa';
+    } else {
+      // Idle: mostra solo il play
+      btn.style.display = '';
+      activeBtns.style.display = 'none';
+      document.getElementById('audio-icon').textContent = '▶';
+      document.getElementById('audio-lbl').textContent = 'Ascolta narrazione';
+    }
+  }
+  // ── Pulsanti approfondimento ──
   ['cronologia','personaggi','connessioni','aneddoti'].forEach(k => {
-    const b = document.getElementById('play-' + k);
-    if (!b) return;
+    const playBtn = document.getElementById('play-' + k);
+    const pauseB = document.getElementById('pause-' + k);
+    const stopB = document.getElementById('stop-' + k);
+    if (!playBtn) return;
     const active = on && section === k;
-    b.classList.toggle('speaking', active);
-    b.classList.remove('loading');
-    b.textContent = active ? '■' : '▶';
+    playBtn.classList.toggle('speaking', active && !paused);
+    playBtn.classList.remove('loading');
+    if (active) {
+      playBtn.style.display = 'none';
+      if (pauseB) { pauseB.style.display = ''; pauseB.textContent = paused ? '▶' : '⏸'; }
+      if (stopB) stopB.style.display = '';
+    } else {
+      playBtn.style.display = '';
+      playBtn.textContent = '▶';
+      if (pauseB) pauseB.style.display = 'none';
+      if (stopB) stopB.style.display = 'none';
+    }
   });
   S.isSpeaking = on;
 }
@@ -1034,19 +1120,24 @@ function _doSpeak(text, section, speakId) {
       u.onstart = () => {
         if (speakId !== _currentSpeakId) { synth.cancel(); return; }
         _currentSection = section;
-        _setAllUI(true, section);
+        _setAllUI(true, section, _paused);
         ka = setInterval(() => { try { if (synth.paused) synth.resume(); } catch(e) {} }, 4000);
       };
     }
 
     u.onend = () => {
       if (speakId !== _currentSpeakId) return;
-      // Pausa tra frasi: breve dopo virgola, più lunga dopo punto
       const lastChar = sentence.slice(-1);
       const pause = (lastChar === '.' || lastChar === '!' || lastChar === '?') ? 420
                   : (lastChar === '…') ? 600
                   : 180;
-      setTimeout(speakNext, pause);
+      // Rispetta pausa manuale: aspetta finché non si riprende
+      function waitResume() {
+        if (speakId !== _currentSpeakId) return;
+        if (_paused) { setTimeout(waitResume, 150); return; }
+        setTimeout(speakNext, pause);
+      }
+      waitResume();
     };
 
     u.onerror = () => {
