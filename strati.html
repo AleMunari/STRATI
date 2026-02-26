@@ -368,6 +368,29 @@
   .leaflet-container { background: #0c0b09 !important; }
   .leaflet-tile { filter: invert(1) hue-rotate(180deg) saturate(0.4) brightness(0.6); }
 
+  /* ══ AUDIO APPROFONDIMENTO BAR ══ */
+  .appr-audio-bar {
+    display: none; position: sticky; bottom: 0;
+    background: rgba(12,11,9,0.97); backdrop-filter: blur(12px);
+    border-top: 1px solid #2a2418;
+    padding: 0.8rem 1.5rem;
+    flex-direction: row; align-items: center; gap: 0.7rem;
+    z-index: 200;
+  }
+  .appr-audio-bar.on { display: flex; }
+  .appr-audio-bar-lbl {
+    flex: 1; font-size: 0.78rem; letter-spacing: 0.1em;
+    color: var(--gold); animation: ab-pulse 2s ease-in-out infinite;
+  }
+  .appr-ctrl-btn {
+    background: transparent; border: 1px solid #2a2418; color: var(--muted);
+    font-family: 'IBM Plex Mono', monospace; font-size: 0.88rem;
+    padding: 0.5rem 0.9rem; cursor: pointer; transition: all 0.3s;
+    min-height: 40px; min-width: 44px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .appr-ctrl-btn:hover { border-color: var(--gold-dim); color: var(--text); }
+
   /* ══ CACHE BADGE ══ */
   .cache-badge {
     font-size: 0.62rem; letter-spacing: 0.2em; color: #5a8a5a;
@@ -466,24 +489,10 @@
     Dall'antichità alla cronaca di ieri.
   </div>
 
-  <!-- GROQ KEY — OBBLIGATORIA -->
-  <div class="key-block">
-    <span class="key-lbl">✦ Groq API Key — necessaria per la narrazione</span>
-    <div class="key-row">
-      <input class="key-inp" id="gem-key" type="password" placeholder="Incolla la tua Groq key..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
-      <button class="key-btn" onclick="testOpenAI()">Verifica</button>
-    </div>
-    <div class="key-st req" id="gem-st">→ Ottienila gratis su console.groq.com</div>
-  </div>
-
-  <!-- ELEVENLABS KEY — voce narrante -->
-  <div class="key-block">
-    <span class="key-lbl">🎙 ElevenLabs API Key — voce narrante</span>
-    <div class="key-row">
-      <input class="key-inp" id="el-key" type="password" placeholder="Incolla la tua ElevenLabs key..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
-      <button class="key-btn" onclick="testEL()">Verifica</button>
-    </div>
-    <div class="key-st req" id="el-st">→ Ottienila su elevenlabs.io</div>
+  <!-- chiavi API integrate — blocchi nascosti -->
+  <div style="display:none">
+    <input id="gem-key"><div id="gem-st"></div>
+    <input id="el-key"><div id="el-st"></div>
   </div>
 
   <div class="s-warning">
@@ -594,6 +603,13 @@
     </div>
   </div>
 
+  <!-- BARRA AUDIO APPROFONDIMENTO (sticky bottom, visibile solo durante lettura approfondimento) -->
+  <div class="appr-audio-bar" id="appr-audio-bar">
+    <span class="appr-audio-bar-lbl" id="appr-audio-lbl">▶ Lettura approfondimento...</span>
+    <button class="appr-ctrl-btn" id="appr-pause-btn" onclick="toggleApprAudio()" title="Pausa / Riprendi">⏸</button>
+    <button class="appr-ctrl-btn" onclick="stopApprAudio()" title="Ferma">■</button>
+  </div>
+
   <div class="history-wrap">
     <div class="hist-lbl">Luoghi visitati</div>
     <div id="hist-list"></div>
@@ -682,8 +698,8 @@
 // STATO
 // ══════════════════════════════════════════════
 const S = {
-  openaiKey: null,
-  elKey: null,
+  openaiKey: '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',
+  elKey: 'sk_c6341681a53148bdb6c62bb4908400d7db0b5f5d0e35252d',
   elVoiceId: 'IKne3meq5aSn9XLyUdCD',
   gpsReady: false,
   lastPos: null,
@@ -875,13 +891,12 @@ function stopAudio() {
 }
 
 // ── SPEECH SYNTHESIS — fallback voce italiana Alice ──
-// Confermato dai test: funziona se silent loop è fermato prima
 function speakWithSystem(text) {
   dbg('→ speechSynthesis Alice');
   const synth = window.speechSynthesis;
   if (!synth) { dbg('✗ no speechSynthesis', '#c03030'); return; }
 
-  // CRITICO: ferma silent loop prima (TEST 4 vs TEST 5)
+  // CRITICO: ferma silent loop prima
   _stopSilentLoop();
   synth.cancel();
 
@@ -892,12 +907,6 @@ function speakWithSystem(text) {
              || voices.find(v => v.lang.startsWith('it'));
     if (itV) dbg('voce: ' + itV.name, '#5a8a5a');
     else dbg('nessuna voce IT (' + voices.length + ')', '#fa0');
-
-    // Dummy silenziosa — workaround prima utterance iOS muta
-    const dummy = new SpeechSynthesisUtterance(' ');
-    dummy.volume = 0; dummy.lang = 'it-IT';
-    if (itV) dummy.voice = itV;
-    synth.speak(dummy);
 
     const u = new SpeechSynthesisUtterance(text.replace(/\n/g, '. ').trim());
     if (itV) u.voice = itV;
@@ -922,8 +931,8 @@ function speakWithSystem(text) {
       setAudioUI(false);
       _restartSilentLoop();
     };
-    synth.speak(u);
     setAudioUI(true);
+    synth.speak(u);
   }
 
   const voices = synth.getVoices();
@@ -953,6 +962,143 @@ function setAudioUI(on) {
   btn.classList.remove('loading');
   document.getElementById('audio-icon').textContent = on ? '■' : '▶';
   document.getElementById('audio-lbl').textContent = on ? 'In riproduzione — tocca per fermare' : 'Ascolta narrazione';
+}
+
+// ── APPROFONDIMENTO AUDIO CONTROLS ──
+function showApprAudioBar(text) {
+  S._apprText = text;
+  S._apprPaused = false;
+  const bar = document.getElementById('appr-audio-bar');
+  bar.classList.add('on');
+  document.getElementById('appr-pause-btn').textContent = '⏸';
+  document.getElementById('appr-audio-lbl').textContent = '▶ Lettura approfondimento...';
+}
+
+function hideApprAudioBar() {
+  const bar = document.getElementById('appr-audio-bar');
+  bar.classList.remove('on');
+  S._apprText = null; S._apprPaused = false;
+}
+
+function toggleApprAudio() {
+  const synth = window.speechSynthesis;
+  const isEL = !!S.elKey;
+  const btn = document.getElementById('appr-pause-btn');
+  const lbl = document.getElementById('appr-audio-lbl');
+
+  if (isEL) {
+    // ElevenLabs non supporta pausa — stop e riparti
+    stopApprAudio();
+    return;
+  }
+  // speechSynthesis pause/resume
+  if (synth) {
+    if (synth.paused) {
+      synth.resume();
+      S._apprPaused = false;
+      btn.textContent = '⏸';
+      lbl.textContent = '▶ Lettura approfondimento...';
+    } else if (synth.speaking) {
+      synth.pause();
+      S._apprPaused = true;
+      btn.textContent = '▶';
+      lbl.textContent = '⏸ In pausa';
+    }
+  }
+}
+
+function stopApprAudio() {
+  stopAudio();
+  hideApprAudioBar();
+}
+
+function speakApprText(text) {
+  if (S.muted) return;
+  if (!S._audioEl) S._audioEl = document.getElementById('strati-audio');
+  const a = S._audioEl;
+  _stopSilentLoop();
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
+
+  if (S.elKey) {
+    const btn = document.getElementById('audio-btn');
+    if (btn) { btn.classList.add('loading'); }
+
+    fetch('https://api.elevenlabs.io/v1/text-to-speech/' + S.elVoiceId + '/stream', {
+      method: 'POST',
+      headers: { 'xi-api-key': S.elKey, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' },
+      body: JSON.stringify({
+        text: text.replace(/\n\n+/g, '\n').trim().slice(0, 1500),
+        model_id: 'eleven_multilingual_v2',
+        voice_settings: { stability: 0.5, similarity_boost: 0.78, style: 0.3, use_speaker_boost: true }
+      })
+    })
+    .then(async r => {
+      if (!r.ok) { throw new Error('HTTP ' + r.status); }
+      return r.blob();
+    })
+    .then(blob => {
+      if (btn) btn.classList.remove('loading');
+      const url = URL.createObjectURL(blob);
+      S._blobUrl = url;
+      a.loop = false; a.volume = 1;
+      a.onplay = () => { dbg('▶ EL appr OK', '#5a8a5a'); };
+      a.onended = () => {
+        dbg('■ EL appr fine'); 
+        if (S._blobUrl) { URL.revokeObjectURL(S._blobUrl); S._blobUrl = null; }
+        a.onplay = null; a.onended = null; a.onerror = null;
+        _restartSilentLoop();
+        hideApprAudioBar();
+      };
+      a.onerror = () => { dbg('✗ EL appr onerror → Alice', '#c03030'); speakApprWithSystem(text); };
+      a.src = url; a.load();
+      a.play()
+        .then(() => dbg('✓ EL appr play OK', '#5a8a5a'))
+        .catch(e => { dbg('✗ appr play: ' + e.name + ' → Alice', '#c03030'); speakApprWithSystem(text); });
+    })
+    .catch(err => {
+      if (btn) btn.classList.remove('loading');
+      speakApprWithSystem(text);
+    });
+  } else {
+    speakApprWithSystem(text);
+  }
+}
+
+function speakApprWithSystem(text) {
+  const synth = window.speechSynthesis;
+  if (!synth) { hideApprAudioBar(); return; }
+  _stopSilentLoop();
+  synth.cancel();
+  const voices = synth.getVoices();
+  function _do(voices) {
+    const itV = voices.find(v => v.name === 'Alice')
+             || voices.find(v => v.lang === 'it-IT' && v.localService)
+             || voices.find(v => v.lang.startsWith('it'));
+    const u = new SpeechSynthesisUtterance(text.replace(/\n/g, '. ').trim());
+    if (itV) u.voice = itV;
+    u.lang = 'it-IT'; u.rate = 0.88; u.pitch = 1.0; u.volume = 1.0;
+    let keepAlive = null;
+    u.onstart = () => {
+      keepAlive = setInterval(() => { if (synth.paused) synth.resume(); }, 5000);
+    };
+    u.onend = () => {
+      if (keepAlive) { clearInterval(keepAlive); keepAlive = null; }
+      _restartSilentLoop();
+      hideApprAudioBar();
+    };
+    u.onerror = () => {
+      if (keepAlive) { clearInterval(keepAlive); keepAlive = null; }
+      _restartSilentLoop();
+      hideApprAudioBar();
+    };
+    synth.speak(u);
+  }
+  if (voices.length > 0) { _do(voices); }
+  else {
+    let done = false;
+    synth.onvoiceschanged = () => { if (done) return; done=true; synth.onvoiceschanged=null; _do(synth.getVoices()); };
+    setTimeout(() => { if (done) return; done=true; synth.onvoiceschanged=null; _do(synth.getVoices()); }, 1200);
+  }
 }
 
 function speakText(text) {
@@ -1035,10 +1181,31 @@ function toggleMute() {
 }
 
 function speakCurrent() {
-  dbg('tap ▶ — speaking=' + S.isSpeaking + ' elKey=' + !!S.elKey + ' text=' + !!S.currentText);
+  dbg('tap ▶ — speaking=' + S.isSpeaking + ' elKey=' + !!S.elKey + ' audioReady=' + !!S._audioReady + ' text=' + !!S.currentText);
   if (S.isSpeaking) { stopAudio(); return; }
   if (!S.currentText || S.muted) return;
-  // speakText gestisce sia EL che fallback Alice — _stopSilentLoop è dentro
+
+  // Se il silent loop non è ancora attivo (primo tap), avviarlo e riprovare
+  if (!S._audioReady && !S._audioStarting) {
+    S._audioStarting = true;
+    dbg('→ avvio silent loop al primo tap');
+    const a = document.getElementById('strati-audio');
+    S._audioEl = a;
+    a.src = SILENT_WAV; a.loop = true; a.volume = 0;
+    a.play()
+      .then(() => {
+        S._audioReady = true; S._audioStarting = false;
+        dbg('✓ silent loop pronto — avvio TTS', '#5a8a5a');
+        speakText(S.currentText);
+      })
+      .catch(e => {
+        S._audioStarting = false;
+        dbg('✗ silent loop fallito al tap: ' + e.message + ' — provo comunque TTS', '#f0a030');
+        speakText(S.currentText);
+      });
+    return;
+  }
+
   speakText(S.currentText);
 }
 
@@ -1107,7 +1274,10 @@ Approfondisci con dati storici precisi.`;
     if (!S.muted && fullAppText.trim()) {
       const firstSectionLen = (data.cronologia || data.personaggi || data.connessioni || data.aneddoti || '').length;
       const estimatedReadTime = firstSectionLen * 18 + 500; // ms per leggere prima sezione
-      setTimeout(() => speakText(fullAppText.trim()), Math.max(estimatedReadTime, 1500));
+      setTimeout(() => {
+        showApprAudioBar(fullAppText.trim());
+        speakApprText(fullAppText.trim());
+      }, Math.max(estimatedReadTime, 1500));
     }
 
   } catch(e) {
@@ -1655,6 +1825,12 @@ function startApp() {
 
 setInterval(()=>document.getElementById('s-time').textContent=timeStr(),60000);
 
+// Auto-carica voce italiana ElevenLabs all'avvio
+window.addEventListener('DOMContentLoaded', () => {
+  bioInit();
+  loadItalianVoice(S.elKey);
+});
+
 // ══════════════════════════════════════════════
 // BIOMETRIA — salva/carica chiavi con Face ID / Touch ID
 // Usa WebAuthn PRF extension per derivare una chiave AES-GCM
@@ -1680,38 +1856,8 @@ async function unifiedStart() {
     navigator.geolocation.getCurrentPosition(p => { window._iosGps = p; }, ()=>{}, { enableHighAccuracy:true, timeout:20000, maximumAge:0 });
   }
 
-  const saved = localStorage.getItem(BIO_KEY);
-  const st = document.getElementById('unified-st');
-
-  if (saved) {
-    // Ha chiavi salvate → carica con passkey poi parte
-    st.textContent = 'Caricamento chiavi...';
-    st.className = 'key-st';
-    try {
-      await bioLoadSilent();
-      if (!S.openaiKey) { st.textContent = '✗ Impossibile caricare le chiavi'; st.className='key-st err'; return; }
-      st.textContent = '✓ Chiavi caricate';
-      st.className = 'key-st ok';
-      setTimeout(() => startApp(), 400);
-    } catch(e) {
-      st.textContent = '✗ ' + (e.message || 'Autenticazione fallita');
-      st.className = 'key-st err';
-    }
-  } else {
-    // Nessuna chiave salvata → parte direttamente (deve aver inserito key manualmente)
-    if (!S.openaiKey) {
-      st.textContent = '✗ Inserisci e verifica la Groq API Key';
-      st.className = 'key-st err';
-      return;
-    }
-    // Tenta salvataggio silenzioso con passkey
-    try {
-      await bioSaveSilent();
-      st.textContent = '🔑 Chiavi salvate per la prossima volta';
-      st.className = 'key-st ok';
-    } catch(e) { /* silenzioso se fallisce */ }
-    setTimeout(() => startApp(), 200);
-  }
+  // Chiavi già integrate — parte direttamente
+  setTimeout(() => startApp(), 200);
 }
 
 function startAppDirect() {
