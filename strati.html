@@ -837,25 +837,24 @@ let _iosVoice = null; // voce italiana scelta, cachata
 function _resolveVoice() {
   if (_iosVoice) return _iosVoice;
   const voices = window.speechSynthesis?.getVoices() || [];
-  // Priorità: Federica Premium → Federica → Alice → altre IT locali
-  _iosVoice = voices.find(v => v.name === 'Federica (Premium)')
-    || voices.find(v => v.name === 'Federica')
-    || voices.find(v => v.name.startsWith('Federica'))
-    || voices.find(v => v.name === 'Alice (Premium)')
-    || voices.find(v => v.name === 'Alice')
-    || voices.find(v => v.lang === 'it-IT' && v.localService)
-    || voices.find(v => v.lang === 'it-IT')
-    || voices.find(v => v.lang.startsWith('it'))
-    || null;
-  if (_iosVoice) dbg('✓ voce: ' + _iosVoice.name + ' [' + _iosVoice.lang + '] locale=' + _iosVoice.localService, '#5a8a5a');
-  else dbg('⚠ nessuna voce IT trovata tra ' + voices.length + ' voci', '#f0a030');
+  const itVoices = voices.filter(v => v.lang.startsWith('it'));
+  dbg('voci italiane: [' + (itVoices.map(v => v.name).join(', ') || 'nessuna') + ']');
+
+  // NON impostiamo una voce specifica — lasciamo u.voice = undefined
+  // così iOS usa automaticamente la voce di default impostata nelle Preferenze
+  // (nel tuo caso: Federica premium)
+  // Salviamo null come sentinella "risolto, usa default"
+  _iosVoice = '__system_default__';
+  dbg('✓ voce: default di sistema (Federica se impostata in Accessibilità)', '#5a8a5a');
   return _iosVoice;
 }
 
 function _listVoices() {
   const voices = window.speechSynthesis?.getVoices() || [];
-  dbg('voci disponibili: ' + voices.length);
-  voices.forEach(v => dbg('  · ' + v.name + ' [' + v.lang + '] locale=' + v.localService));
+  const itVoices = voices.filter(v => v.lang.startsWith('it'));
+  dbg('voci totali: ' + voices.length + ' | italiane: ' + itVoices.length);
+  itVoices.forEach(v => dbg('  🇮🇹 ' + v.name + ' [' + v.lang + '] locale=' + v.localService));
+  if (itVoices.length === 0) dbg('⚠ nessuna voce italiana installata!', '#c03030');
 }
 
 function stopAllAudio() {
@@ -899,15 +898,16 @@ function _doSpeak(text, section, speakId) {
   const synth = window.speechSynthesis;
   synth.cancel(); // cancella sempre prima
 
-  const voice = _resolveVoice();
+  const voiceToken = _resolveVoice();
   const u = new SpeechSynthesisUtterance(text.replace(/\n+/g, '. ').replace(/\s+/g, ' ').trim());
   u.lang = 'it-IT';
-  u.rate = 0.85;   // Federica Premium suona meglio lenta — più narrativa
+  u.rate = 0.85;
   u.pitch = 1.0;
   u.volume = 1.0;
-  if (voice) u.voice = voice;
+  // NON impostiamo u.voice → iOS usa automaticamente Federica (default nelle Preferenze)
+  // Se impostassimo Alice esplicitamente, bypasseremmo la scelta dell'utente
 
-  dbg('speak → ' + (voice ? voice.name : 'voce default') + ' section=' + section + ' chars=' + text.length);
+  dbg('speak → default sistema it-IT section=' + section + ' chars=' + text.length);
 
   let ka = null;
   u.onstart = () => {
