@@ -668,6 +668,15 @@
 <div id="flash"></div>
 <audio id="strati-audio" preload="none" style="display:none"></audio>
 
+<!-- DEBUG AUDIO PANEL -->
+<div id="debug-panel" style="position:fixed;bottom:0;left:0;right:0;background:#0a0a08;border-top:2px solid #c9a84c;padding:0.6rem 1rem;z-index:9999;font-family:monospace;font-size:0.68rem;color:#c9a84c;max-height:160px;overflow-y:auto;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.3rem;">
+    <b>🔊 AUDIO DEBUG</b>
+    <span style="cursor:pointer;color:#888;padding:0 0.3rem;" onclick="this.closest('#debug-panel').style.display='none'">✕</span>
+  </div>
+  <div id="debug-log" style="line-height:1.8;"></div>
+</div>
+
 <script>
 // ══════════════════════════════════════════════
 // STATO
@@ -811,35 +820,49 @@ async function loadItalianVoice(key) {
   } catch(e) {}
 }
 
+// ── DEBUG ──
+function dbg(msg, color) {
+  const el = document.getElementById('debug-log');
+  if (!el) return;
+  const t = new Date().toTimeString().slice(0,8);
+  const d = document.createElement('div');
+  d.style.color = color || '#c9a84c';
+  d.textContent = t + ' ' + msg;
+  el.appendChild(d);
+  el.scrollTop = el.scrollHeight;
+  console.log('[STRATI]', msg);
+}
+
 // ══════════════════════════════════════════════
 // AUDIO SYSTEM
-// iOS Safari blocca .play() fuori da gesti utente.
-// Soluzione: all'avvio parte un loop silenzioso infinito
-// che mantiene la pagina "trusted". Il blob EL viene
-// riprodotto con un nuovo elemento Audio() creato nel .then()
-// che iOS permette perché c'è già audio attivo sulla pagina.
 // ══════════════════════════════════════════════
 
 function startSilentLoop() {
-  // WAV silenzioso 1 secondo in loop — mantiene il permesso audio attivo
   const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
   const a = document.getElementById('strati-audio');
   a.src = SILENT;
   a.loop = true;
   a.volume = 0;
-  a.play().catch(() => {}); // silenzioso
+  a.play()
+    .then(() => { dbg('✓ silent loop avviato', '#5a8a5a'); })
+    .catch(e => { dbg('✗ silent loop FALLITO: ' + e.message, '#c03030'); });
   S._silentLoop = a;
 }
 
 function speakWithSystem(text) {
-  if (!S.synth) return;
+  dbg('speakWithSystem → voce sistema');
+  if (!S.synth) { dbg('✗ speechSynthesis non disponibile', '#c03030'); return; }
   S.synth.cancel();
   const u = new SpeechSynthesisUtterance(text.replace(/\n/g, ' '));
-  const itV = S.synth.getVoices().find(v => v.lang.startsWith('it'));
-  if (itV) u.voice = itV;
+  const voices = S.synth.getVoices();
+  dbg('voci disponibili: ' + voices.length);
+  const itV = voices.find(v => v.lang.startsWith('it'));
+  if (itV) { u.voice = itV; dbg('voce: ' + itV.name); }
+  else { dbg('⚠ nessuna voce IT trovata', '#f0a030'); }
   u.rate = 0.85; u.pitch = 0.92;
-  u.onstart = () => setAudioUI(true);
-  u.onend = u.onerror = () => setAudioUI(false);
+  u.onstart = () => { dbg('▶ sistema: riproduzione avviata', '#5a8a5a'); setAudioUI(true); };
+  u.onend = () => { dbg('■ sistema: fine'); setAudioUI(false); };
+  u.onerror = e => { dbg('✗ sistema errore: ' + e.error, '#c03030'); setAudioUI(false); };
   S.synth.speak(u);
   setAudioUI(true);
 }
@@ -865,10 +888,13 @@ function setAudioUI(on) {
 }
 
 function speakText(text) {
-  if (S.muted || !text) return;
+  dbg('speakText() chiamata');
+  if (S.muted) { dbg('⚠ muted, skip', '#f0a030'); return; }
+  if (!text) { dbg('✗ testo vuoto', '#c03030'); return; }
   stopAudio();
 
   if (S.elKey) {
+    dbg('ElevenLabs key presente → fetch audio...');
     const btn = document.getElementById('audio-btn');
     if (btn) { btn.classList.add('loading'); document.getElementById('audio-lbl').textContent = 'Sintetizzando...'; }
 
@@ -876,37 +902,38 @@ function speakText(text) {
       method: 'POST',
       headers: { 'xi-api-key': S.elKey, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' },
       body: JSON.stringify({
-        text: text.replace(/\n\n+/g, '\n').trim(),
+        text: text.replace(/\n\n+/g, '\n').trim().slice(0, 500),
         model_id: 'eleven_multilingual_v2',
         voice_settings: { stability: 0.5, similarity_boost: 0.78, style: 0.3, use_speaker_boost: true }
       })
     })
-    .then(r => { if (!r.ok) throw new Error('EL ' + r.status); return r.blob(); })
+    .then(r => {
+      dbg('EL risposta: HTTP ' + r.status);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.blob();
+    })
     .then(blob => {
+      dbg('EL blob: ' + Math.round(blob.size/1024) + 'KB tipo=' + blob.type);
       if (btn) btn.classList.remove('loading');
       const url = URL.createObjectURL(blob);
-      // Nuovo elemento Audio — iOS lo permette perché il silent loop è attivo
       const a = new Audio(url);
       a._blobUrl = url;
       S.currentAudio = a;
-      a.onplay = () => setAudioUI(true);
-      a.onended = a.onerror = () => {
-        setAudioUI(false);
-        if (a._blobUrl) { URL.revokeObjectURL(a._blobUrl); a._blobUrl = null; }
-        if (S.currentAudio === a) S.currentAudio = null;
-      };
-      a.play().catch(e => {
-        console.warn('EL play failed:', e.message, '→ fallback sistema');
-        setAudioUI(false);
-        speakWithSystem(text);
-      });
+      a.onplay = () => { dbg('▶ EL: riproduzione avviata', '#5a8a5a'); setAudioUI(true); };
+      a.onended = () => { dbg('■ EL: fine'); setAudioUI(false); if (a._blobUrl) { URL.revokeObjectURL(a._blobUrl); a._blobUrl = null; } };
+      a.onerror = e => { dbg('✗ EL play errore: ' + (a.error?.message||e), '#c03030'); setAudioUI(false); speakWithSystem(text); };
+      dbg('EL: chiamo .play()...');
+      a.play()
+        .then(() => { dbg('✓ EL play() promise ok', '#5a8a5a'); })
+        .catch(e => { dbg('✗ EL play() RIFIUTATO: ' + e.name + ' ' + e.message, '#c03030'); speakWithSystem(text); });
     })
     .catch(err => {
       if (btn) btn.classList.remove('loading');
-      console.warn('EL fetch failed:', err.message, '→ fallback sistema');
+      dbg('✗ EL fetch errore: ' + err.message + ' → fallback sistema', '#c03030');
       speakWithSystem(text);
     });
   } else {
+    dbg('nessuna EL key → voce sistema');
     speakWithSystem(text);
   }
 }
@@ -920,18 +947,9 @@ function toggleMute() {
 }
 
 function speakCurrent() {
+  dbg('speakCurrent() tap — isSpeaking=' + S.isSpeaking + ' muted=' + S.muted + ' hasText=' + !!S.currentText);
   if (S.isSpeaking) { stopAudio(); setAudioUI(false); return; }
   if (!S.currentText || S.muted) return;
-  // iOS: assicuriamoci che il contesto audio sia sbloccato (siamo in un onclick)
-  if (!S._audioCtxUnlocked) {
-    try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const buf = ctx.createBuffer(1,1,22050);
-      const src = ctx.createBufferSource();
-      src.buffer=buf; src.connect(ctx.destination); src.start(0);
-      S._audioCtxUnlocked = true;
-    } catch(e) {}
-  }
   speakText(S.currentText);
 }
 
@@ -1514,16 +1532,15 @@ function startApp() {
   if (!S.openaiKey) {
     alert('Inserisci e verifica la Groq API Key prima di iniziare.'); return;
   }
-
-  // Avvia loop silenzioso — sblocca audio iOS per tutta la sessione
+  dbg('startApp() — avvio loop silenzioso');
   startSilentLoop();
 
-  // SpeechSynthesis: pre-carica voci
   if (window.speechSynthesis) {
     window.speechSynthesis.getVoices();
     const w = new SpeechSynthesisUtterance(' ');
     w.volume = 0;
     window.speechSynthesis.speak(w);
+    dbg('speechSynthesis warm-up inviato');
   }
 
   S.startTime = new Date();
@@ -1532,6 +1549,7 @@ function startApp() {
   setTimeout(() => {
     document.getElementById('splash').style.display = 'none';
     document.getElementById('app').classList.add('visible');
+    dbg('app visibile — EL key: ' + (S.elKey ? 'SÌ (' + S.elKey.slice(0,8) + '…)' : 'NO'));
     setTimeout(() => { if (!S.gpsReady) document.getElementById('gps-txt').textContent = 'GPS lento — vai all\'aperto'; }, 8000);
   }, 1200);
 }
