@@ -701,7 +701,7 @@ const S = {
   speedSamples: [],
   history: [],
   watchId: null,
-  synth: window.speechSynthesis,
+  // synth: rimosso — solo ElevenLabs
   epochsVisited: new Set(),
   currentSources: [],
   // NUOVI
@@ -849,16 +849,31 @@ function startSilentLoop() {
 }
 
 function speakWithSystem(text) {
-  dbg('→ voce sistema');
-  if (!S.synth) { dbg('✗ no speechSynthesis', '#c03030'); return; }
-  S.synth.cancel();
-  const u = new SpeechSynthesisUtterance(text.replace(/\n/g, ' '));
-  const itV = S.synth.getVoices().find(v => v.lang.startsWith('it'));
-  if (itV) { u.voice = itV; dbg('voce: ' + itV.name); }
-  u.rate = 0.85; u.pitch = 0.92;
-  u.onstart = () => { dbg('▶ sistema OK', '#5a8a5a'); setAudioUI(true); };
-  u.onend = u.onerror = () => { dbg('■ sistema fine'); setAudioUI(false); };
-  S.synth.speak(u); setAudioUI(true);
+  // Nessun fallback sistema — solo ElevenLabs
+  dbg('EL non disponibile — inserisci una chiave ElevenLabs valida', '#c03030');
+  showAudioError('Chiave ElevenLabs assente o scaduta. Tocca ▶ per riprovare.');
+  setAudioUI(false);
+}
+
+function showAudioError(msg) {
+  const btn = document.getElementById('audio-btn');
+  if (!btn) return;
+  btn.classList.remove('loading', 'speaking');
+  document.getElementById('audio-icon').textContent = '⚠';
+  document.getElementById('audio-lbl').textContent = msg;
+  setTimeout(() => {
+    document.getElementById('audio-icon').textContent = '▶';
+    document.getElementById('audio-lbl').textContent = 'Ascolta narrazione';
+  }, 4000);
+}
+
+function _restartSilentLoop() {
+  const a = S._audioEl;
+  if (!a) return;
+  const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+  a.onplay = null; a.onended = null; a.onerror = null;
+  a.src = SILENT; a.loop = true; a.volume = 0;
+  a.play().catch(() => {});
 }
 
 function stopAudio() {
@@ -866,12 +881,8 @@ function stopAudio() {
   if (a && !a.loop) {
     try { a.pause(); } catch(e) {}
     if (a._blobUrl) { URL.revokeObjectURL(a._blobUrl); a._blobUrl = null; }
-    // Riavvia il silent loop
-    const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
-    a.onplay = null; a.onended = null; a.onerror = null;
-    a.src = SILENT; a.loop = true; a.volume = 0; a.play().catch(()=>{});
+    _restartSilentLoop();
   }
-  if (S.synth) S.synth.cancel();
   setAudioUI(false);
 }
 
@@ -895,7 +906,6 @@ function speakText(text) {
   const a = S._audioEl;
 
   // Ferma qualsiasi riproduzione in corso
-  if (S.synth) S.synth.cancel();
   if (!a.loop) { try { a.pause(); } catch(e) {} }
 
   if (S.elKey) {
@@ -912,7 +922,21 @@ function speakText(text) {
         voice_settings: { stability: 0.5, similarity_boost: 0.78, style: 0.3, use_speaker_boost: true }
       })
     })
-    .then(r => { dbg('EL HTTP ' + r.status); if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+    .then(async r => {
+      dbg('EL HTTP ' + r.status);
+      if (!r.ok) {
+        if (r.status === 401 || r.status === 403) {
+          try {
+            const j = await r.json().catch(() => ({}));
+            const reason = j?.detail?.status || 'invalid_key';
+            dbg('EL bloccato: ' + reason + ' → disabilitato, uso sistema', '#f0a030');
+          } catch(e) {}
+          S.elKey = null;
+        }
+        throw new Error('HTTP ' + r.status);
+      }
+      return r.blob();
+    })
     .then(blob => {
       if (btn) btn.classList.remove('loading');
       dbg('blob ' + Math.round(blob.size/1024) + 'KB → play su elem DOM');
@@ -926,10 +950,8 @@ function speakText(text) {
         dbg('■ EL fine');
         setAudioUI(false);
         if (a._blobUrl) { URL.revokeObjectURL(a._blobUrl); a._blobUrl = null; }
-        // Riavvia silent loop
-        const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
         a.onplay = null; a.onended = null; a.onerror = null;
-        a.src = SILENT; a.loop = true; a.volume = 0; a.play().catch(()=>{});
+        _restartSilentLoop();
       };
       a.onerror = () => { dbg('✗ EL onerror → sistema', '#c03030'); speakWithSystem(text); };
       a.src = url;
@@ -1546,13 +1568,7 @@ function startApp() {
   dbg('startApp() — avvio loop silenzioso');
   startSilentLoop();
 
-  if (window.speechSynthesis) {
-    window.speechSynthesis.getVoices();
-    const w = new SpeechSynthesisUtterance(' ');
-    w.volume = 0;
-    window.speechSynthesis.speak(w);
-    dbg('speechSynthesis warm-up inviato');
-  }
+  // Solo ElevenLabs — nessun warm-up speechSynthesis necessario
 
   S.startTime = new Date();
   startTracking();
@@ -1566,7 +1582,6 @@ function startApp() {
 }
 
 setInterval(()=>document.getElementById('s-time').textContent=timeStr(),60000);
-if(window.speechSynthesis) window.speechSynthesis.onvoiceschanged=()=>{};
 
 // ══════════════════════════════════════════════
 // BIOMETRIA — salva/carica chiavi con Face ID / Touch ID
