@@ -1456,11 +1456,17 @@ function startApp() {
     return;
   }
   S.startTime = new Date();
+
+  // !! CRITICO per iOS Safari: la richiesta GPS deve avvenire
+  // SINCRONA rispetto al tap dell'utente, prima di qualsiasi setTimeout.
+  // Se chiamata dentro un timeout (anche breve), iOS non mostra il dialog.
+  startTracking();
+
+  // Poi avvia la transizione UI
   document.getElementById('splash').classList.add('hidden');
   setTimeout(()=>{
     document.getElementById('splash').style.display='none';
     document.getElementById('app').classList.add('visible');
-    startTracking();
     setTimeout(()=>{ if(!S.gpsReady) document.getElementById('gps-txt').textContent='GPS lento — vai all\'aperto'; },8000);
   },1500);
 }
