@@ -835,26 +835,32 @@ let _iosVoice = null; // voce italiana scelta, cachata
 
 // Trova e cacha la miglior voce italiana disponibile
 function _resolveVoice() {
-  if (_iosVoice) return _iosVoice;
+  // Non cachare — rileva ogni volta, le voci possono cambiare
   const voices = window.speechSynthesis?.getVoices() || [];
   const itVoices = voices.filter(v => v.lang.startsWith('it'));
-  dbg('voci italiane: [' + (itVoices.map(v => v.name).join(', ') || 'nessuna') + ']');
+  dbg('voci italiane trovate: ' + itVoices.map(v => '"' + v.name + '"').join(', '));
 
-  // NON impostiamo una voce specifica — lasciamo u.voice = undefined
-  // così iOS usa automaticamente la voce di default impostata nelle Preferenze
-  // (nel tuo caso: Federica premium)
-  // Salviamo null come sentinella "risolto, usa default"
-  _iosVoice = '__system_default__';
-  dbg('✓ voce: default di sistema (Federica se impostata in Accessibilità)', '#5a8a5a');
-  return _iosVoice;
+  // Cerca Federica in tutti i formati possibili che iOS può usare
+  const voice =
+    voices.find(v => v.name === 'Federica (Premium)') ||
+    voices.find(v => v.name === 'Federica') ||
+    voices.find(v => v.name.toLowerCase().includes('federica')) ||
+    voices.find(v => v.name === 'Alice (Premium)') ||
+    voices.find(v => v.name === 'Alice') ||
+    voices.find(v => v.lang === 'it-IT' && v.localService) ||
+    voices.find(v => v.lang === 'it-IT') ||
+    null;
+
+  if (voice) dbg('✓ voce: "' + voice.name + '"', '#5a8a5a');
+  else dbg('⚠ nessuna voce italiana trovata', '#c03030');
+  return voice;
 }
 
 function _listVoices() {
   const voices = window.speechSynthesis?.getVoices() || [];
   const itVoices = voices.filter(v => v.lang.startsWith('it'));
   dbg('voci totali: ' + voices.length + ' | italiane: ' + itVoices.length);
-  itVoices.forEach(v => dbg('  🇮🇹 ' + v.name + ' [' + v.lang + '] locale=' + v.localService));
-  if (itVoices.length === 0) dbg('⚠ nessuna voce italiana installata!', '#c03030');
+  itVoices.forEach(v => dbg('  🇮🇹 "' + v.name + '" [' + v.lang + '] locale=' + v.localService));
 }
 
 function stopAllAudio() {
@@ -896,26 +902,24 @@ function _setLoading(section, on) {
 // ── Core speak via speechSynthesis ──
 function _doSpeak(text, section, speakId) {
   const synth = window.speechSynthesis;
-  synth.cancel(); // cancella sempre prima
+  synth.cancel();
 
-  const voiceToken = _resolveVoice();
+  const voice = _resolveVoice();
   const u = new SpeechSynthesisUtterance(text.replace(/\n+/g, '. ').replace(/\s+/g, ' ').trim());
   u.lang = 'it-IT';
-  u.rate = 0.85;
-  u.pitch = 1.0;
-  u.volume = 1.0;
-  // NON impostiamo u.voice → iOS usa automaticamente Federica (default nelle Preferenze)
-  // Se impostassimo Alice esplicitamente, bypasseremmo la scelta dell'utente
+  u.rate = 0.40;   // velocità: slider a ~40% come nelle tue impostazioni
+  u.pitch = 0.75;  // tono: basso come nelle tue impostazioni
+  u.volume = 0.9;  // volume: alto come nelle tue impostazioni
+  if (voice) u.voice = voice; // imposta Federica se trovata
 
-  dbg('speak → default sistema it-IT section=' + section + ' chars=' + text.length);
+  dbg('speak → "' + (voice ? voice.name : 'default sistema') + '" rate=' + u.rate + ' chars=' + text.length);
 
   let ka = null;
   u.onstart = () => {
     if (speakId !== _currentSpeakId) { synth.cancel(); return; }
     _currentSection = section;
     _setAllUI(true, section);
-    dbg('▶ OK — ' + (voice ? voice.name : '?'), '#5a8a5a');
-    // keepalive: iOS mette in pausa con schermo spento
+    dbg('▶ in riproduzione: "' + (voice ? voice.name : 'default') + '"', '#5a8a5a');
     ka = setInterval(() => { try { if (synth.paused) synth.resume(); } catch(e) {} }, 4000);
   };
   u.onend = () => {
@@ -927,7 +931,7 @@ function _doSpeak(text, section, speakId) {
   };
   u.onerror = (e) => {
     if (ka) { clearInterval(ka); ka = null; }
-    dbg('✗ errore: ' + e.error + ' section=' + section, '#c03030');
+    dbg('✗ errore: ' + e.error, '#c03030');
     _currentSection = null;
     _setAllUI(false);
   };
@@ -949,7 +953,6 @@ function speak(text, section) {
   // Se voci già caricate → parla subito
   const voices = synth.getVoices();
   if (voices.length > 0) {
-    _iosVoice = null; // forza ri-selezione con voci aggiornate
     _doSpeak(text, section, id);
     return;
   }
