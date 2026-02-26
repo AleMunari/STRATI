@@ -848,23 +848,76 @@ function startSilentLoop() {
     .catch(e => dbg('✗ silent loop FALLITO: ' + e.message, '#c03030'));
 }
 
-function speakWithSystem(text) {
-  // Nessun fallback sistema — solo ElevenLabs
-  dbg('EL non disponibile — inserisci una chiave ElevenLabs valida', '#c03030');
-  showAudioError('Chiave ElevenLabs assente o scaduta. Tocca ▶ per riprovare.');
-  setAudioUI(false);
+// ── GOOGLE TTS — fallback gratuito, nessuna chiave, funziona su iOS ──
+function speakWithGoogle(text) {
+  dbg('→ Google TTS');
+  const a = S._audioEl;
+  if (!a) { dbg('✗ no audio element', '#c03030'); return; }
+
+  const btn = document.getElementById('audio-btn');
+  if (btn) { btn.classList.add('loading'); document.getElementById('audio-lbl').textContent = 'Caricamento audio...'; }
+
+  // Spezza il testo in chunk da max 200 caratteri (limite Google TTS)
+  const chunks = _splitTextChunks(text.replace(/\n/g, '. ').trim(), 180);
+  dbg('Google TTS: ' + chunks.length + ' chunk');
+  _playGoogleChunks(chunks, 0, a, btn);
 }
 
-function showAudioError(msg) {
-  const btn = document.getElementById('audio-btn');
-  if (!btn) return;
-  btn.classList.remove('loading', 'speaking');
-  document.getElementById('audio-icon').textContent = '⚠';
-  document.getElementById('audio-lbl').textContent = msg;
-  setTimeout(() => {
-    document.getElementById('audio-icon').textContent = '▶';
-    document.getElementById('audio-lbl').textContent = 'Ascolta narrazione';
-  }, 4000);
+function _splitTextChunks(text, maxLen) {
+  const chunks = [];
+  let remaining = text;
+  while (remaining.length > 0) {
+    if (remaining.length <= maxLen) { chunks.push(remaining); break; }
+    // Taglia al punto/virgola/spazio più vicino
+    let cut = remaining.lastIndexOf('.', maxLen);
+    if (cut < 80) cut = remaining.lastIndexOf(',', maxLen);
+    if (cut < 80) cut = remaining.lastIndexOf(' ', maxLen);
+    if (cut < 0) cut = maxLen;
+    chunks.push(remaining.slice(0, cut + 1).trim());
+    remaining = remaining.slice(cut + 1).trim();
+  }
+  return chunks.filter(c => c.length > 0);
+}
+
+function _playGoogleChunks(chunks, idx, a, btn) {
+  if (idx >= chunks.length) {
+    dbg('■ Google TTS fine');
+    if (btn) btn.classList.remove('loading');
+    setAudioUI(false);
+    _restartSilentLoop();
+    return;
+  }
+  const chunk = chunks[idx];
+  const url = 'https://translate.google.com/translate_tts?ie=UTF-8&tl=it&client=tw-ob&q=' + encodeURIComponent(chunk);
+  
+  a.loop = false; a.volume = 1;
+  a.onplay = () => {
+    if (btn) btn.classList.remove('loading');
+    dbg('▶ Google TTS chunk ' + (idx+1) + '/' + chunks.length, '#5a8a5a');
+    setAudioUI(true);
+  };
+  a.onended = () => {
+    a.onplay = null; a.onended = null; a.onerror = null;
+    setTimeout(() => _playGoogleChunks(chunks, idx + 1, a, btn), 150);
+  };
+  a.onerror = (e) => {
+    dbg('✗ Google TTS errore chunk ' + (idx+1) + ': ' + (e.message||'?'), '#c03030');
+    a.onplay = null; a.onended = null; a.onerror = null;
+    // Salta chunk e continua
+    setTimeout(() => _playGoogleChunks(chunks, idx + 1, a, btn), 100);
+  };
+  a.src = url;
+  a.load();
+  a.play().catch(e => {
+    dbg('✗ Google play rifiutato: ' + e.name, '#c03030');
+    _restartSilentLoop();
+    setAudioUI(false);
+  });
+}
+
+function speakWithSystem(text) {
+  // Fallback → Google TTS (sempre funzionante, no chiave)
+  speakWithGoogle(text);
 }
 
 function _restartSilentLoop() {
