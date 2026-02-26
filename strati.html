@@ -837,40 +837,65 @@ function dbg(msg, color) {
 // AUDIO SYSTEM
 // ══════════════════════════════════════════════
 
+const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+
 function startSilentLoop() {
-  // Avvia il loop silenzioso sull'elemento DOM — lo sblocca per tutta la sessione
-  const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
   const a = document.getElementById('strati-audio');
   S._audioEl = a;
-  a.src = SILENT; a.loop = true; a.volume = 0;
+  a.src = SILENT_WAV; a.loop = true; a.volume = 0;
   a.play()
     .then(() => { dbg('✓ silent loop avviato', '#5a8a5a'); S._audioReady = true; })
-    .catch(e => dbg('✗ silent loop FALLITO: ' + e.message, '#c03030'));
+    .catch(e => dbg('✗ silent loop fallito: ' + e.message, '#c03030'));
 }
 
-// ── SPEECH SYNTHESIS — fallback, SOLO da tap diretto utente ──
-// iOS richiede che speak() sia chiamato direttamente da un gesto utente.
-// Per questo NON viene mai chiamato in automatico, solo da speakCurrent().
+function _stopSilentLoop() {
+  // DEVE essere chiamato prima di qualsiasi audio reale
+  const a = S._audioEl;
+  if (!a) return;
+  try { a.pause(); } catch(e) {}
+  a.onplay = null; a.onended = null; a.onerror = null;
+  a.loop = false;
+}
+
+function _restartSilentLoop() {
+  const a = S._audioEl;
+  if (!a) return;
+  a.onplay = null; a.onended = null; a.onerror = null;
+  a.src = SILENT_WAV; a.loop = true; a.volume = 0;
+  a.play().catch(() => {});
+}
+
+function stopAudio() {
+  if (S._blobUrl) { URL.revokeObjectURL(S._blobUrl); S._blobUrl = null; }
+  const a = S._audioEl;
+  if (a) { try { a.pause(); } catch(e) {} }
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
+  setAudioUI(false);
+  _restartSilentLoop();
+}
+
+// ── SPEECH SYNTHESIS — fallback voce italiana Alice ──
+// Confermato dai test: funziona se silent loop è fermato prima
 function speakWithSystem(text) {
-  dbg('→ speechSynthesis (tap diretto)');
+  dbg('→ speechSynthesis Alice');
   const synth = window.speechSynthesis;
   if (!synth) { dbg('✗ no speechSynthesis', '#c03030'); return; }
 
-  // Ferma silent loop prima — i due sistemi si contendono il canale iOS
-  const a = S._audioEl;
-  if (a) { try { a.pause(); a.volume = 0; } catch(e) {} }
-
+  // CRITICO: ferma silent loop prima (TEST 4 vs TEST 5)
+  _stopSilentLoop();
   synth.cancel();
 
   function _doSpeak(voices) {
-    const itV = voices.find(v => v.lang === 'it-IT' && v.localService)  // voce locale = migliore
+    // Alice è la voce italiana locale su iOS — confermata dai test
+    const itV = voices.find(v => v.name === 'Alice')
+             || voices.find(v => v.lang === 'it-IT' && v.localService)
              || voices.find(v => v.lang.startsWith('it'));
-    if (itV) dbg('voce: ' + itV.name);
-    else dbg('nessuna voce IT (' + voices.length + ' disponibili)');
+    if (itV) dbg('voce: ' + itV.name, '#5a8a5a');
+    else dbg('nessuna voce IT (' + voices.length + ')', '#fa0');
 
-    // Dummy silenziosa — workaround iOS prima utterance muta
+    // Dummy silenziosa — workaround prima utterance iOS muta
     const dummy = new SpeechSynthesisUtterance(' ');
-    dummy.volume = 0;
+    dummy.volume = 0; dummy.lang = 'it-IT';
     if (itV) dummy.voice = itV;
     synth.speak(dummy);
 
@@ -878,24 +903,22 @@ function speakWithSystem(text) {
     if (itV) u.voice = itV;
     u.lang = 'it-IT'; u.rate = 0.88; u.pitch = 1.0; u.volume = 1.0;
 
-    // Keepalive — Safari blocca speechSynthesis se schermo spento
     let keepAlive = null;
     u.onstart = () => {
       setAudioUI(true);
-      dbg('▶ speechSynthesis OK', '#5a8a5a');
-      keepAlive = setInterval(() => {
-        if (synth.paused) synth.resume();
-      }, 5000);
+      dbg('▶ Alice OK', '#5a8a5a');
+      // Keepalive: Safari uccide speechSynthesis con schermo spento
+      keepAlive = setInterval(() => { if (synth.paused) synth.resume(); }, 5000);
     };
     u.onend = () => {
       if (keepAlive) { clearInterval(keepAlive); keepAlive = null; }
-      dbg('■ speechSynthesis fine');
+      dbg('■ Alice fine');
       setAudioUI(false);
       _restartSilentLoop();
     };
     u.onerror = (e) => {
       if (keepAlive) { clearInterval(keepAlive); keepAlive = null; }
-      dbg('✗ speechSynthesis errore: ' + (e.error || '?'), '#c03030');
+      dbg('✗ Alice errore: ' + (e.error || '?'), '#c03030');
       setAudioUI(false);
       _restartSilentLoop();
     };
@@ -907,7 +930,7 @@ function speakWithSystem(text) {
   if (voices.length > 0) {
     _doSpeak(voices);
   } else {
-    dbg('attesa voci iOS...');
+    dbg('attesa voci...');
     let done = false;
     synth.onvoiceschanged = () => {
       if (done) return; done = true;
@@ -920,25 +943,6 @@ function speakWithSystem(text) {
       _doSpeak(synth.getVoices());
     }, 1200);
   }
-}
-
-function _restartSilentLoop() {
-  const a = S._audioEl;
-  if (!a) return;
-  const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
-  a.onplay = null; a.onended = null; a.onerror = null;
-  a.src = SILENT; a.loop = true; a.volume = 0;
-  a.play().catch(() => {});
-}
-
-function stopAudio() {
-  const a = S._audioEl;
-  if (a && !a.loop) {
-    try { a.pause(); } catch(e) {}
-    if (a._blobUrl) { URL.revokeObjectURL(a._blobUrl); a._blobUrl = null; }
-    _restartSilentLoop();
-  }
-  setAudioUI(false);
 }
 
 function setAudioUI(on) {
@@ -956,15 +960,15 @@ function speakText(text) {
   if (S.muted) { dbg('muted', '#f0a030'); return; }
   if (!text) { dbg('no text', '#c03030'); return; }
 
-  // Assicurati che _audioEl sia inizializzato
   if (!S._audioEl) S._audioEl = document.getElementById('strati-audio');
   const a = S._audioEl;
 
-  // Ferma qualsiasi riproduzione in corso
-  if (!a.loop) { try { a.pause(); } catch(e) {} }
+  // CRITICO: ferma sempre il silent loop prima di qualsiasi audio
+  _stopSilentLoop();
+  if (window.speechSynthesis) window.speechSynthesis.cancel();
 
   if (S.elKey) {
-    dbg('EL key trovata → fetch...');
+    dbg('EL key → fetch blob...');
     const btn = document.getElementById('audio-btn');
     if (btn) { btn.classList.add('loading'); document.getElementById('audio-lbl').textContent = 'Sintetizzando...'; }
 
@@ -996,24 +1000,20 @@ function speakText(text) {
       if (btn) btn.classList.remove('loading');
       dbg('blob ' + Math.round(blob.size/1024) + 'KB → play su elem DOM');
       const url = URL.createObjectURL(blob);
-      a._blobUrl = url;
-      // Usa STESSO elemento DOM già sbloccato — stop al silent loop e avvia blob
-      a.loop = false;
-      a.volume = 1;
+      S._blobUrl = url;
+      a.loop = false; a.volume = 1;
       a.onplay = () => { dbg('▶ EL OK', '#5a8a5a'); setAudioUI(true); };
       a.onended = () => {
-        dbg('■ EL fine');
-        setAudioUI(false);
-        if (a._blobUrl) { URL.revokeObjectURL(a._blobUrl); a._blobUrl = null; }
+        dbg('■ EL fine'); setAudioUI(false);
+        if (S._blobUrl) { URL.revokeObjectURL(S._blobUrl); S._blobUrl = null; }
         a.onplay = null; a.onended = null; a.onerror = null;
         _restartSilentLoop();
       };
-      a.onerror = () => { dbg('✗ EL onerror → sistema', '#c03030'); speakWithSystem(text); };
-      a.src = url;
-      a.load();
+      a.onerror = () => { dbg('✗ EL onerror → Alice', '#c03030'); speakWithSystem(text); };
+      a.src = url; a.load();
       a.play()
-        .then(() => dbg('✓ play OK', '#5a8a5a'))
-        .catch(e => { dbg('✗ play RIFIUTATO: ' + e.name, '#c03030'); speakWithSystem(text); });
+        .then(() => dbg('✓ EL play OK', '#5a8a5a'))
+        .catch(e => { dbg('✗ play rifiutato: ' + e.name + ' → Alice', '#c03030'); speakWithSystem(text); });
     })
     .catch(err => {
       if (btn) btn.classList.remove('loading');
@@ -1035,15 +1035,11 @@ function toggleMute() {
 }
 
 function speakCurrent() {
-  dbg('speakCurrent() tap — isSpeaking=' + S.isSpeaking + ' muted=' + S.muted + ' hasText=' + !!S.currentText);
-  if (S.isSpeaking) { stopAudio(); setAudioUI(false); return; }
+  dbg('tap ▶ — speaking=' + S.isSpeaking + ' elKey=' + !!S.elKey + ' text=' + !!S.currentText);
+  if (S.isSpeaking) { stopAudio(); return; }
   if (!S.currentText || S.muted) return;
-  // Se non c'è EL, usa speechSynthesis direttamente dal tap (gesto utente = funziona su iOS)
-  if (!S.elKey) {
-    speakWithSystem(S.currentText);
-  } else {
-    speakText(S.currentText);
-  }
+  // speakText gestisce sia EL che fallback Alice — _stopSilentLoop è dentro
+  speakText(S.currentText);
 }
 
 // ══════════════════════════════════════════════
