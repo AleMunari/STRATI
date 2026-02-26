@@ -499,11 +499,8 @@
     Dall'antichità alla cronaca di ieri.
   </div>
 
-  <!-- chiavi API integrate — blocchi nascosti -->
-  <div style="display:none">
-    <input id="gem-key"><div id="gem-st"></div>
-    <input id="el-key"><div id="el-st"></div>
-  </div>
+  <!-- chiave API integrata — placeholder per compatibilità bio -->
+  <div style="display:none"><input id="gem-key"><div id="gem-st"></div></div>
 
   <div class="s-warning">
     Usa le cuffie · Cammina in luoghi sicuri<br>
@@ -714,9 +711,6 @@
 // ══════════════════════════════════════════════
 const S = {
   openaiKey: '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',
-  elKey: 'sk_c6341681a53148bdb6c62bb4908400d7db0b5f5d0e35252d',
-  elVoiceId: null, // viene impostato da resolveELVoice() al boot
-  EL_FALLBACK_VOICE: 'IKne3meq5aSn9XLyUdCD', // Charlie — usato solo se non troviamo IT
   gpsReady: false,
   lastPos: null,
   currentPos: null,
@@ -733,7 +727,7 @@ const S = {
   speedSamples: [],
   history: [],
   watchId: null,
-  // synth: rimosso — solo ElevenLabs
+
   epochsVisited: new Set(),
   currentSources: [],
   // NUOVI
@@ -817,78 +811,6 @@ async function callOpenAI(systemPrompt, userPrompt) {
   }
 }
 
-// ══════════════════════════════════════════════
-// ELEVENLABS — risoluzione voce e test
-// ══════════════════════════════════════════════
-async function testEL() {
-  const key = document.getElementById('el-key').value.trim();
-  const st = document.getElementById('el-st');
-  if (!key) { st.textContent='Inserisci una chiave'; st.className='key-st err'; return; }
-  st.textContent='Verifica...'; st.className='key-st';
-  try {
-    const r = await fetch('https://api.elevenlabs.io/v1/models', { headers:{'xi-api-key':key} });
-    if (r.ok) {
-      S.elKey = key;
-      st.textContent='✓ ElevenLabs attivo';
-      st.className='key-st ok';
-      await resolveELVoice();
-    } else {
-      st.textContent='✗ Chiave non valida (cod. '+r.status+')';
-      st.className='key-st err';
-    }
-  } catch(e) { st.textContent='✗ Errore di rete'; st.className='key-st err'; }
-}
-
-// Voce italiana preferita — lista priorità
-const IT_VOICE_NAMES = ['giovanni','luca','mario','alberto','dante','marco','italian'];
-// Voci italiane ElevenLabs note (fallback hardcoded se API non le restituisce)
-const IT_VOICE_IDS_KNOWN = [
-  { id: 'AZnzlk1XvdvUeBnXmlld', name: 'Domi (IT)' },
-  { id: 'onwK4e9ZLuTAKqWW03F9', name: 'Daniel (IT)' },
-];
-
-async function resolveELVoice() {
-  dbg('→ risoluzione voce EL...', '#c9a84c');
-  try {
-    const r = await fetch('https://api.elevenlabs.io/v1/voices', {
-      headers: { 'xi-api-key': S.elKey }
-    });
-    if (!r.ok) {
-      dbg('✗ voices HTTP ' + r.status + ' — uso voce default', '#c03030');
-      S.elVoiceId = IT_VOICE_IDS_KNOWN[0].id;
-      return;
-    }
-    const d = await r.json();
-    const voices = d.voices || [];
-    dbg('voci disponibili: ' + voices.length, '#5a8a5a');
-    voices.forEach(v => dbg('  · ' + v.name + ' [' + v.voice_id + '] lang=' + (v.labels?.language||'?')));
-
-    // Cerca prima per lingua italiana esplicita
-    let chosen = voices.find(v => v.labels?.language === 'it');
-    // Poi per nome
-    if (!chosen) chosen = voices.find(v => IT_VOICE_NAMES.some(n => v.name.toLowerCase().includes(n)));
-    // Poi qualsiasi voce disponibile nell'account
-    if (!chosen && voices.length > 0) chosen = voices[0];
-
-    if (chosen) {
-      S.elVoiceId = chosen.voice_id;
-      dbg('✓ voce scelta: ' + chosen.name + ' [' + chosen.voice_id + ']', '#5a8a5a');
-    } else {
-      S.elVoiceId = IT_VOICE_IDS_KNOWN[0].id;
-      dbg('⚠ nessuna voce trovata — uso default ' + IT_VOICE_IDS_KNOWN[0].name, '#f0a030');
-    }
-  } catch(e) {
-    dbg('✗ errore resolveELVoice: ' + e.message, '#c03030');
-    S.elVoiceId = IT_VOICE_IDS_KNOWN[0].id;
-  }
-}
-
-async function loadItalianVoice(key) {
-  // alias per compatibilità
-  if (key) S.elKey = key;
-  await resolveELVoice();
-}
-
 // ── DEBUG ──
 function dbg(msg, color) {
   const el = document.getElementById('debug-log');
@@ -904,8 +826,7 @@ function dbg(msg, color) {
 
 // ══════════════════════════════════════════════
 // AUDIO SYSTEM — Voci native iOS/macOS (speechSynthesis)
-// Priorità: Alice (IT) → Federica (IT) → qualsiasi voce IT
-// Nessun ElevenLabs, nessun AudioContext, nessun silent loop
+// Priorità: Federica Premium → Federica → Alice → qualsiasi voce IT
 // ══════════════════════════════════════════════
 
 let _currentSpeakId = 0;
@@ -1678,15 +1599,13 @@ function startApp() {
   dbg('startApp() — avvio loop silenzioso');
   startSilentLoop();
 
-  // Solo ElevenLabs — nessun warm-up speechSynthesis necessario
-
   S.startTime = new Date();
   startTracking();
   document.getElementById('splash').classList.add('hidden');
   setTimeout(() => {
     document.getElementById('splash').style.display = 'none';
     document.getElementById('app').classList.add('visible');
-    dbg('app visibile — EL key: ' + (S.elKey ? 'SÌ (' + S.elKey.slice(0,8) + '…)' : 'NO'));
+    dbg('app visibile — voce: ' + (_iosVoice ? _iosVoice.name : 'non ancora caricata'));
     setTimeout(() => { if (!S.gpsReady) document.getElementById('gps-txt').textContent = 'GPS lento — vai all\'aperto'; }, 8000);
   }, 1200);
 }
@@ -1755,13 +1674,10 @@ function bioClearInline() {
   document.getElementById('start-btn-label').textContent = 'Inizia a camminare';
   document.getElementById('unified-st').textContent = 'Chiavi eliminate';
   document.getElementById('unified-st').className = 'key-st';
-  S.openaiKey = null; S.elKey = null;
+  S.openaiKey = null;
   document.getElementById('gem-key').value = '';
-  document.getElementById('el-key').value = '';
   document.getElementById('gem-st').textContent = '→ Ottienila gratis su console.groq.com';
   document.getElementById('gem-st').className = 'key-st req';
-  document.getElementById('el-st').textContent = 'Senza chiave: voce di sistema';
-  document.getElementById('el-st').className = 'key-st';
 }
 
 // Chiave AES derivata da un segreto fisso + fingerprint del dispositivo
@@ -1805,25 +1721,18 @@ async function bioLoadSilent() {
     S.openaiKey = payload.groq;
     document.getElementById('gem-key').value = payload.groq;
   }
-  if (payload.el) {
-    S.elKey = payload.el;
-    document.getElementById('el-key').value = payload.el;
-    loadItalianVoice(payload.el);
-  }
 }
 
 async function bioSaveSilent() {
   const groqKey = document.getElementById('gem-key').value.trim();
-  const elKey = document.getElementById('el-key').value.trim();
   if (!groqKey) return;
 
-  // Cifra con AES-GCM, nessun WebAuthn
   const salt = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
   const key = await deriveKey(salt);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const enc = await crypto.subtle.encrypt(
     { name:'AES-GCM', iv }, key,
-    new TextEncoder().encode(JSON.stringify({ groq: groqKey, el: elKey }))
+    new TextEncoder().encode(JSON.stringify({ groq: groqKey }))
   );
   const data = {
     salt,
