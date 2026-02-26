@@ -916,9 +916,12 @@ let _iosVoice = null; // voce italiana scelta, cachata
 function _resolveVoice() {
   if (_iosVoice) return _iosVoice;
   const voices = window.speechSynthesis?.getVoices() || [];
-  // Priorità: Alice o Federica (voci locali iOS alta qualità)
-  _iosVoice = voices.find(v => v.name === 'Alice')
+  // Priorità: Federica Premium → Federica → Alice → altre IT locali
+  _iosVoice = voices.find(v => v.name === 'Federica (Premium)')
     || voices.find(v => v.name === 'Federica')
+    || voices.find(v => v.name.startsWith('Federica'))
+    || voices.find(v => v.name === 'Alice (Premium)')
+    || voices.find(v => v.name === 'Alice')
     || voices.find(v => v.lang === 'it-IT' && v.localService)
     || voices.find(v => v.lang === 'it-IT')
     || voices.find(v => v.lang.startsWith('it'))
@@ -978,7 +981,7 @@ function _doSpeak(text, section, speakId) {
   const voice = _resolveVoice();
   const u = new SpeechSynthesisUtterance(text.replace(/\n+/g, '. ').replace(/\s+/g, ' ').trim());
   u.lang = 'it-IT';
-  u.rate = 0.90;
+  u.rate = 0.85;   // Federica Premium suona meglio lenta — più narrativa
   u.pitch = 1.0;
   u.volume = 1.0;
   if (voice) u.voice = voice;
