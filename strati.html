@@ -1059,6 +1059,7 @@ function stopAudio() { stopAllAudio(); }
 function setAudioUI(on) { _setAllUI(on, on ? (_currentSection || 'main') : null); }
 function _stopSilentLoop() {}
 function _restartSilentLoop() {}
+function startSilentLoop() { S._audioReady = true; }
 function _clearLoading(section) { _setLoading(section, false); }
 function speakWithSystem(text) { speak(text, 'main'); }
 
