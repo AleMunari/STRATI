@@ -838,40 +838,38 @@ function dbg(msg, color) {
 // ══════════════════════════════════════════════
 
 function startSilentLoop() {
+  // Avvia il loop silenzioso sull'elemento DOM — lo sblocca per tutta la sessione
   const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
   const a = document.getElementById('strati-audio');
-  a.src = SILENT;
-  a.loop = true;
-  a.volume = 0;
+  S._audioEl = a;
+  a.src = SILENT; a.loop = true; a.volume = 0;
   a.play()
-    .then(() => { dbg('✓ silent loop avviato', '#5a8a5a'); })
-    .catch(e => { dbg('✗ silent loop FALLITO: ' + e.message, '#c03030'); });
-  S._silentLoop = a;
+    .then(() => { dbg('✓ silent loop avviato', '#5a8a5a'); S._audioReady = true; })
+    .catch(e => dbg('✗ silent loop FALLITO: ' + e.message, '#c03030'));
 }
 
 function speakWithSystem(text) {
-  dbg('speakWithSystem → voce sistema');
-  if (!S.synth) { dbg('✗ speechSynthesis non disponibile', '#c03030'); return; }
+  dbg('→ voce sistema');
+  if (!S.synth) { dbg('✗ no speechSynthesis', '#c03030'); return; }
   S.synth.cancel();
   const u = new SpeechSynthesisUtterance(text.replace(/\n/g, ' '));
-  const voices = S.synth.getVoices();
-  dbg('voci disponibili: ' + voices.length);
-  const itV = voices.find(v => v.lang.startsWith('it'));
+  const itV = S.synth.getVoices().find(v => v.lang.startsWith('it'));
   if (itV) { u.voice = itV; dbg('voce: ' + itV.name); }
-  else { dbg('⚠ nessuna voce IT trovata', '#f0a030'); }
   u.rate = 0.85; u.pitch = 0.92;
-  u.onstart = () => { dbg('▶ sistema: riproduzione avviata', '#5a8a5a'); setAudioUI(true); };
-  u.onend = () => { dbg('■ sistema: fine'); setAudioUI(false); };
-  u.onerror = e => { dbg('✗ sistema errore: ' + e.error, '#c03030'); setAudioUI(false); };
-  S.synth.speak(u);
-  setAudioUI(true);
+  u.onstart = () => { dbg('▶ sistema OK', '#5a8a5a'); setAudioUI(true); };
+  u.onend = u.onerror = () => { dbg('■ sistema fine'); setAudioUI(false); };
+  S.synth.speak(u); setAudioUI(true);
 }
 
 function stopAudio() {
-  if (S.currentAudio && S.currentAudio !== S._silentLoop) {
-    try { S.currentAudio.pause(); } catch(e) {}
-    if (S.currentAudio._blobUrl) { URL.revokeObjectURL(S.currentAudio._blobUrl); S.currentAudio._blobUrl = null; }
-    S.currentAudio = null;
+  const a = S._audioEl;
+  if (a && !a.loop) {
+    try { a.pause(); } catch(e) {}
+    if (a._blobUrl) { URL.revokeObjectURL(a._blobUrl); a._blobUrl = null; }
+    // Riavvia il silent loop
+    const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+    a.onplay = null; a.onended = null; a.onerror = null;
+    a.src = SILENT; a.loop = true; a.volume = 0; a.play().catch(()=>{});
   }
   if (S.synth) S.synth.cancel();
   setAudioUI(false);
@@ -888,17 +886,24 @@ function setAudioUI(on) {
 }
 
 function speakText(text) {
-  dbg('speakText() chiamata');
-  if (S.muted) { dbg('⚠ muted, skip', '#f0a030'); return; }
-  if (!text) { dbg('✗ testo vuoto', '#c03030'); return; }
-  stopAudio();
+  dbg('speakText()');
+  if (S.muted) { dbg('muted', '#f0a030'); return; }
+  if (!text) { dbg('no text', '#c03030'); return; }
+
+  // Assicurati che _audioEl sia inizializzato
+  if (!S._audioEl) S._audioEl = document.getElementById('strati-audio');
+  const a = S._audioEl;
+
+  // Ferma qualsiasi riproduzione in corso
+  if (S.synth) S.synth.cancel();
+  if (!a.loop) { try { a.pause(); } catch(e) {} }
 
   if (S.elKey) {
-    dbg('ElevenLabs key presente → fetch audio...');
+    dbg('EL key trovata → fetch...');
     const btn = document.getElementById('audio-btn');
     if (btn) { btn.classList.add('loading'); document.getElementById('audio-lbl').textContent = 'Sintetizzando...'; }
 
-    fetch(`https://api.elevenlabs.io/v1/text-to-speech/${S.elVoiceId}/stream`, {
+    fetch('https://api.elevenlabs.io/v1/text-to-speech/' + S.elVoiceId + '/stream', {
       method: 'POST',
       headers: { 'xi-api-key': S.elKey, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' },
       body: JSON.stringify({
@@ -907,33 +912,39 @@ function speakText(text) {
         voice_settings: { stability: 0.5, similarity_boost: 0.78, style: 0.3, use_speaker_boost: true }
       })
     })
-    .then(r => {
-      dbg('EL risposta: HTTP ' + r.status);
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.blob();
-    })
+    .then(r => { dbg('EL HTTP ' + r.status); if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
     .then(blob => {
-      dbg('EL blob: ' + Math.round(blob.size/1024) + 'KB tipo=' + blob.type);
       if (btn) btn.classList.remove('loading');
+      dbg('blob ' + Math.round(blob.size/1024) + 'KB → play su elem DOM');
       const url = URL.createObjectURL(blob);
-      const a = new Audio(url);
       a._blobUrl = url;
-      S.currentAudio = a;
-      a.onplay = () => { dbg('▶ EL: riproduzione avviata', '#5a8a5a'); setAudioUI(true); };
-      a.onended = () => { dbg('■ EL: fine'); setAudioUI(false); if (a._blobUrl) { URL.revokeObjectURL(a._blobUrl); a._blobUrl = null; } };
-      a.onerror = e => { dbg('✗ EL play errore: ' + (a.error?.message||e), '#c03030'); setAudioUI(false); speakWithSystem(text); };
-      dbg('EL: chiamo .play()...');
+      // Usa STESSO elemento DOM già sbloccato — stop al silent loop e avvia blob
+      a.loop = false;
+      a.volume = 1;
+      a.onplay = () => { dbg('▶ EL OK', '#5a8a5a'); setAudioUI(true); };
+      a.onended = () => {
+        dbg('■ EL fine');
+        setAudioUI(false);
+        if (a._blobUrl) { URL.revokeObjectURL(a._blobUrl); a._blobUrl = null; }
+        // Riavvia silent loop
+        const SILENT = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+        a.onplay = null; a.onended = null; a.onerror = null;
+        a.src = SILENT; a.loop = true; a.volume = 0; a.play().catch(()=>{});
+      };
+      a.onerror = () => { dbg('✗ EL onerror → sistema', '#c03030'); speakWithSystem(text); };
+      a.src = url;
+      a.load();
       a.play()
-        .then(() => { dbg('✓ EL play() promise ok', '#5a8a5a'); })
-        .catch(e => { dbg('✗ EL play() RIFIUTATO: ' + e.name + ' ' + e.message, '#c03030'); speakWithSystem(text); });
+        .then(() => dbg('✓ play OK', '#5a8a5a'))
+        .catch(e => { dbg('✗ play RIFIUTATO: ' + e.name, '#c03030'); speakWithSystem(text); });
     })
     .catch(err => {
       if (btn) btn.classList.remove('loading');
-      dbg('✗ EL fetch errore: ' + err.message + ' → fallback sistema', '#c03030');
+      dbg('✗ fetch: ' + err.message, '#c03030');
       speakWithSystem(text);
     });
   } else {
-    dbg('nessuna EL key → voce sistema');
+    dbg('no EL key → sistema');
     speakWithSystem(text);
   }
 }
@@ -1670,19 +1681,7 @@ async function bioLoadSilent() {
   const saved = localStorage.getItem(BIO_KEY);
   if (!saved) return;
 
-  if (window.PublicKeyCredential) {
-    try {
-      await navigator.credentials.get({
-        publicKey: {
-          challenge: crypto.getRandomValues(new Uint8Array(32)),
-          rpId: location.hostname || 'localhost',
-          userVerification: 'required',
-          timeout: 30000,
-        }
-      });
-    } catch(e) { /* fallback */ }
-  }
-
+  // Nessun WebAuthn — decifra direttamente con AES-GCM
   const data = JSON.parse(saved);
   const key = await deriveKey(data.salt);
   const iv = new Uint8Array(atob(data.iv).split('').map(c=>c.charCodeAt(0)));
@@ -1706,19 +1705,7 @@ async function bioSaveSilent() {
   const elKey = document.getElementById('el-key').value.trim();
   if (!groqKey) return;
 
-  if (window.PublicKeyCredential) {
-    try {
-      await navigator.credentials.get({
-        publicKey: {
-          challenge: crypto.getRandomValues(new Uint8Array(32)),
-          rpId: location.hostname || 'localhost',
-          userVerification: 'required',
-          timeout: 30000,
-        }
-      });
-    } catch(e) { /* fallback */ }
-  }
-
+  // Cifra con AES-GCM, nessun WebAuthn
   const salt = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
   const key = await deriveKey(salt);
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -1732,7 +1719,6 @@ async function bioSaveSilent() {
     ct: btoa(String.fromCharCode(...new Uint8Array(enc)))
   };
   localStorage.setItem(BIO_KEY, JSON.stringify(data));
-  // Aggiorna label pulsante per la prossima apertura
   document.getElementById('start-btn-label').textContent = '🔑 Usa Passkey';
   document.getElementById('manual-start-link').style.display = 'flex';
 }
