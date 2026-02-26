@@ -334,12 +334,22 @@
   .approfondimento-lbl {
     font-size: 0.68rem; letter-spacing: 0.3em; color: var(--gold-dim);
     text-transform: uppercase; margin-bottom: 0.8rem; display: flex;
-    align-items: center; gap: 0.5rem;
+    align-items: center; gap: 0.5rem; justify-content: space-between;
   }
   .approfondimento-lbl::before {
     content: ''; display: inline-block; width: 16px; height: 1px;
-    background: var(--gold-dim);
+    background: var(--gold-dim); flex-shrink: 0;
   }
+  .appr-play-btn {
+    background: transparent; border: 1px solid #2a2418; color: var(--gold-dim);
+    font-size: 0.75rem; padding: 0.25rem 0.6rem; cursor: pointer;
+    transition: all 0.25s; min-height: 28px; min-width: 36px;
+    font-family: 'IBM Plex Mono', monospace; margin-left: auto;
+    flex-shrink: 0;
+  }
+  .appr-play-btn:hover { border-color: var(--gold); color: var(--gold); }
+  .appr-play-btn.speaking { border-color: var(--gold); color: var(--gold); animation: ab-pulse 2s ease-in-out infinite; }
+  .appr-play-btn.loading { color: #3a3020; border-color: #1e1c18; pointer-events: none; }
   .approfondimento-text {
     font-size: var(--fs-base); line-height: var(--lh); color: var(--text);
   }
@@ -585,29 +595,34 @@
 
     <div class="approfondimento-wrap" id="approfondimento-wrap">
       <div class="approfondimento-section" id="app-cronologia" style="display:none;">
-        <div class="approfondimento-lbl">Cronologia</div>
+        <div class="approfondimento-lbl">
+          Cronologia
+          <button class="appr-play-btn" id="play-cronologia" onclick="speakSection('cronologia')" title="Ascolta">▶</button>
+        </div>
         <div class="approfondimento-text" id="app-cronologia-text"></div>
       </div>
       <div class="approfondimento-section" id="app-personaggi" style="display:none;">
-        <div class="approfondimento-lbl">Personaggi</div>
+        <div class="approfondimento-lbl">
+          Personaggi
+          <button class="appr-play-btn" id="play-personaggi" onclick="speakSection('personaggi')" title="Ascolta">▶</button>
+        </div>
         <div class="approfondimento-text" id="app-personaggi-text"></div>
       </div>
       <div class="approfondimento-section" id="app-connessioni" style="display:none;">
-        <div class="approfondimento-lbl">Luoghi connessi</div>
+        <div class="approfondimento-lbl">
+          Luoghi connessi
+          <button class="appr-play-btn" id="play-connessioni" onclick="speakSection('connessioni')" title="Ascolta">▶</button>
+        </div>
         <div class="approfondimento-text" id="app-connessioni-text"></div>
       </div>
       <div class="approfondimento-section" id="app-aneddoti" style="display:none;">
-        <div class="approfondimento-lbl">Aneddoti</div>
+        <div class="approfondimento-lbl">
+          Aneddoti
+          <button class="appr-play-btn" id="play-aneddoti" onclick="speakSection('aneddoti')" title="Ascolta">▶</button>
+        </div>
         <div class="approfondimento-text" id="app-aneddoti-text"></div>
       </div>
     </div>
-  </div>
-
-  <!-- BARRA AUDIO APPROFONDIMENTO (sticky bottom, visibile solo durante lettura approfondimento) -->
-  <div class="appr-audio-bar" id="appr-audio-bar">
-    <span class="appr-audio-bar-lbl" id="appr-audio-lbl">▶ Lettura approfondimento...</span>
-    <button class="appr-ctrl-btn" id="appr-pause-btn" onclick="toggleApprAudio()" title="Pausa / Riprendi">⏸</button>
-    <button class="appr-ctrl-btn" onclick="stopApprAudio()" title="Ferma">■</button>
   </div>
 
   <div class="history-wrap">
@@ -850,364 +865,262 @@ function dbg(msg, color) {
 }
 
 // ══════════════════════════════════════════════
-// AUDIO SYSTEM
+// AUDIO SYSTEM — ElevenLabs first, fallback sistema
+// Strategia iOS: AudioContext sbloccato al tap → fetch → decodeAudioData → play
+// Nessun silent loop, nessun elemento <audio> per EL
 // ══════════════════════════════════════════════
 
-const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+let _ac = null; // AudioContext globale
+let _acSource = null; // sorgente corrente
+let _acGain = null;
+let _currentSpeakId = 0; // cancella richieste in volo
+let _currentSection = null; // sezione in riproduzione ('main' | 'cronologia' | ...)
 
-function startSilentLoop() {
-  const a = document.getElementById('strati-audio');
-  S._audioEl = a;
-  a.src = SILENT_WAV; a.loop = true; a.volume = 0;
-  a.play()
-    .then(() => { dbg('✓ silent loop avviato', '#5a8a5a'); S._audioReady = true; })
-    .catch(e => dbg('✗ silent loop fallito: ' + e.message, '#c03030'));
+function _getAC() {
+  if (!_ac || _ac.state === 'closed') {
+    _ac = new (window.AudioContext || window.webkitAudioContext)();
+    _acGain = _ac.createGain();
+    _acGain.connect(_ac.destination);
+  }
+  return _ac;
 }
 
-function _stopSilentLoop() {
-  // DEVE essere chiamato prima di qualsiasi audio reale
-  const a = S._audioEl;
-  if (!a) return;
-  try { a.pause(); } catch(e) {}
-  a.onplay = null; a.onended = null; a.onerror = null;
-  a.loop = false;
+function _resumeAC() {
+  const ac = _getAC();
+  if (ac.state === 'suspended') ac.resume();
+  return ac;
 }
 
-function _restartSilentLoop() {
-  const a = S._audioEl;
-  if (!a) return;
-  a.onplay = null; a.onended = null; a.onerror = null;
-  a.src = SILENT_WAV; a.loop = true; a.volume = 0;
-  a.play().catch(() => {});
-}
-
-function stopAudio() {
-  if (S._blobUrl) { URL.revokeObjectURL(S._blobUrl); S._blobUrl = null; }
-  const a = S._audioEl;
-  if (a) { try { a.pause(); } catch(e) {} }
+function stopAllAudio() {
+  _currentSpeakId++; // invalida fetch in volo
+  if (_acSource) { try { _acSource.stop(); } catch(e) {} _acSource = null; }
   if (window.speechSynthesis) window.speechSynthesis.cancel();
-  setAudioUI(false);
-  _restartSilentLoop();
+  _setAllUI(false);
+  _currentSection = null;
 }
 
-// ── SPEECH SYNTHESIS — fallback voce italiana Alice ──
-function speakWithSystem(text) {
-  dbg('→ speechSynthesis Alice');
-  const synth = window.speechSynthesis;
-  if (!synth) { dbg('✗ no speechSynthesis', '#c03030'); return; }
-
-  // CRITICO: ferma silent loop prima
-  _stopSilentLoop();
-  synth.cancel();
-
-  function _doSpeak(voices) {
-    // Alice è la voce italiana locale su iOS — confermata dai test
-    const itV = voices.find(v => v.name === 'Alice')
-             || voices.find(v => v.lang === 'it-IT' && v.localService)
-             || voices.find(v => v.lang.startsWith('it'));
-    if (itV) dbg('voce: ' + itV.name, '#5a8a5a');
-    else dbg('nessuna voce IT (' + voices.length + ')', '#fa0');
-
-    const u = new SpeechSynthesisUtterance(text.replace(/\n/g, '. ').trim());
-    if (itV) u.voice = itV;
-    u.lang = 'it-IT'; u.rate = 0.88; u.pitch = 1.0; u.volume = 1.0;
-
-    let keepAlive = null;
-    u.onstart = () => {
-      setAudioUI(true);
-      dbg('▶ Alice OK', '#5a8a5a');
-      // Keepalive: Safari uccide speechSynthesis con schermo spento
-      keepAlive = setInterval(() => { if (synth.paused) synth.resume(); }, 5000);
-    };
-    u.onend = () => {
-      if (keepAlive) { clearInterval(keepAlive); keepAlive = null; }
-      dbg('■ Alice fine');
-      setAudioUI(false);
-      _restartSilentLoop();
-    };
-    u.onerror = (e) => {
-      if (keepAlive) { clearInterval(keepAlive); keepAlive = null; }
-      dbg('✗ Alice errore: ' + (e.error || '?'), '#c03030');
-      setAudioUI(false);
-      _restartSilentLoop();
-    };
-    setAudioUI(true);
-    synth.speak(u);
-  }
-
-  const voices = synth.getVoices();
-  if (voices.length > 0) {
-    _doSpeak(voices);
-  } else {
-    dbg('attesa voci...');
-    let done = false;
-    synth.onvoiceschanged = () => {
-      if (done) return; done = true;
-      synth.onvoiceschanged = null;
-      _doSpeak(synth.getVoices());
-    };
-    setTimeout(() => {
-      if (done) return; done = true;
-      synth.onvoiceschanged = null;
-      _doSpeak(synth.getVoices());
-    }, 1200);
-  }
-}
-
-function setAudioUI(on) {
-  S.isSpeaking = on;
+function _setAllUI(on, section) {
+  // Aggiorna btn narrazione principale
   const btn = document.getElementById('audio-btn');
-  if (!btn) return;
-  btn.classList.toggle('speaking', on);
-  btn.classList.remove('loading');
-  document.getElementById('audio-icon').textContent = on ? '■' : '▶';
-  document.getElementById('audio-lbl').textContent = on ? 'In riproduzione — tocca per fermare' : 'Ascolta narrazione';
-}
-
-// ── APPROFONDIMENTO AUDIO CONTROLS ──
-function showApprAudioBar(text) {
-  S._apprText = text;
-  S._apprPaused = false;
-  const bar = document.getElementById('appr-audio-bar');
-  bar.classList.add('on');
-  document.getElementById('appr-pause-btn').textContent = '⏸';
-  document.getElementById('appr-audio-lbl').textContent = '▶ Lettura approfondimento...';
-}
-
-function hideApprAudioBar() {
-  const bar = document.getElementById('appr-audio-bar');
-  bar.classList.remove('on');
-  S._apprText = null; S._apprPaused = false;
-}
-
-function toggleApprAudio() {
-  const synth = window.speechSynthesis;
-  const isEL = !!S.elKey;
-  const btn = document.getElementById('appr-pause-btn');
-  const lbl = document.getElementById('appr-audio-lbl');
-
-  if (isEL) {
-    // ElevenLabs non supporta pausa — stop e riparti
-    stopApprAudio();
-    return;
-  }
-  // speechSynthesis pause/resume
-  if (synth) {
-    if (synth.paused) {
-      synth.resume();
-      S._apprPaused = false;
-      btn.textContent = '⏸';
-      lbl.textContent = '▶ Lettura approfondimento...';
-    } else if (synth.speaking) {
-      synth.pause();
-      S._apprPaused = true;
-      btn.textContent = '▶';
-      lbl.textContent = '⏸ In pausa';
+  if (btn) {
+    const isMain = section === 'main' || (!section && on === false);
+    if (!on || section === 'main') {
+      btn.classList.toggle('speaking', on && section === 'main');
+      btn.classList.remove('loading');
+      document.getElementById('audio-icon').textContent = (on && section === 'main') ? '■' : '▶';
+      document.getElementById('audio-lbl').textContent = (on && section === 'main') ? 'In riproduzione — tocca per fermare' : 'Ascolta narrazione';
     }
   }
+  // Aggiorna btn sezioni approfondimento
+  ['cronologia','personaggi','connessioni','aneddoti'].forEach(k => {
+    const b = document.getElementById('play-' + k);
+    if (!b) return;
+    const active = on && section === k;
+    b.classList.toggle('speaking', active);
+    b.classList.remove('loading');
+    b.textContent = active ? '■' : '▶';
+  });
+  S.isSpeaking = on;
 }
 
-function stopApprAudio() {
-  stopAudio();
-  hideApprAudioBar();
-}
+// ── ElevenLabs via AudioContext ──
+async function _speakEL(text, section, speakId) {
+  const ac = _resumeAC();
+  dbg('EL fetch → ' + section + ' id=' + speakId);
 
-function speakApprText(text) {
-  if (S.muted) return;
-  if (!S._audioEl) S._audioEl = document.getElementById('strati-audio');
-  const a = S._audioEl;
-  _stopSilentLoop();
-  if (window.speechSynthesis) window.speechSynthesis.cancel();
-
-  if (S.elKey) {
+  // Mostra loading sul bottone giusto
+  if (section === 'main') {
     const btn = document.getElementById('audio-btn');
-    if (btn) { btn.classList.add('loading'); }
-
-    fetch('https://api.elevenlabs.io/v1/text-to-speech/' + S.elVoiceId + '/stream', {
-      method: 'POST',
-      headers: { 'xi-api-key': S.elKey, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' },
-      body: JSON.stringify({
-        text: text.replace(/\n\n+/g, '\n').trim().slice(0, 1500),
-        model_id: 'eleven_multilingual_v2',
-        voice_settings: { stability: 0.5, similarity_boost: 0.78, style: 0.3, use_speaker_boost: true }
-      })
-    })
-    .then(async r => {
-      if (!r.ok) { throw new Error('HTTP ' + r.status); }
-      return r.blob();
-    })
-    .then(blob => {
-      if (btn) btn.classList.remove('loading');
-      const url = URL.createObjectURL(blob);
-      S._blobUrl = url;
-      a.loop = false; a.volume = 1;
-      a.onplay = () => { dbg('▶ EL appr OK', '#5a8a5a'); };
-      a.onended = () => {
-        dbg('■ EL appr fine'); 
-        if (S._blobUrl) { URL.revokeObjectURL(S._blobUrl); S._blobUrl = null; }
-        a.onplay = null; a.onended = null; a.onerror = null;
-        _restartSilentLoop();
-        hideApprAudioBar();
-      };
-      a.onerror = () => { dbg('✗ EL appr onerror → Alice', '#c03030'); speakApprWithSystem(text); };
-      a.src = url; a.load();
-      a.play()
-        .then(() => dbg('✓ EL appr play OK', '#5a8a5a'))
-        .catch(e => { dbg('✗ appr play: ' + e.name + ' → Alice', '#c03030'); speakApprWithSystem(text); });
-    })
-    .catch(err => {
-      if (btn) btn.classList.remove('loading');
-      speakApprWithSystem(text);
-    });
+    if (btn) { btn.classList.add('loading'); document.getElementById('audio-lbl').textContent = 'Sintetizzando...'; }
   } else {
-    speakApprWithSystem(text);
+    const b = document.getElementById('play-' + section);
+    if (b) b.classList.add('loading');
   }
+
+  let r;
+  try {
+    r = await fetch('https://api.elevenlabs.io/v1/text-to-speech/' + S.elVoiceId, {
+      method: 'POST',
+      headers: { 'xi-api-key': S.elKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: text.replace(/\n\n+/g, ' ').trim().slice(0, 1200),
+        model_id: 'eleven_multilingual_v2',
+        voice_settings: { stability: 0.45, similarity_boost: 0.80, style: 0.25, use_speaker_boost: true }
+      })
+    });
+  } catch(e) {
+    dbg('✗ EL network: ' + e.message + ' → fallback', '#c03030');
+    if (speakId !== _currentSpeakId) return;
+    _clearLoading(section);
+    _speakSys(text, section, speakId);
+    return;
+  }
+
+  if (speakId !== _currentSpeakId) return; // cancellato nel frattempo
+
+  if (!r.ok) {
+    dbg('✗ EL HTTP ' + r.status + ' → fallback', '#c03030');
+    if (r.status === 401 || r.status === 403) { S.elKey = null; dbg('EL key disabilitata', '#f0a030'); }
+    _clearLoading(section);
+    _speakSys(text, section, speakId);
+    return;
+  }
+
+  let arrayBuf;
+  try {
+    const blob = await r.blob();
+    if (speakId !== _currentSpeakId) return;
+    arrayBuf = await blob.arrayBuffer();
+    if (speakId !== _currentSpeakId) return;
+  } catch(e) {
+    dbg('✗ EL blob/buffer: ' + e.message, '#c03030');
+    _clearLoading(section);
+    _speakSys(text, section, speakId);
+    return;
+  }
+
+  let audioBuf;
+  try {
+    audioBuf = await ac.decodeAudioData(arrayBuf);
+  } catch(e) {
+    dbg('✗ EL decode: ' + e.message + ' → fallback', '#c03030');
+    _clearLoading(section);
+    _speakSys(text, section, speakId);
+    return;
+  }
+
+  if (speakId !== _currentSpeakId) return;
+
+  _clearLoading(section);
+  _currentSection = section;
+  _setAllUI(true, section);
+
+  const src = ac.createBufferSource();
+  src.buffer = audioBuf;
+  src.connect(_acGain);
+  _acSource = src;
+
+  src.onended = () => {
+    if (speakId !== _currentSpeakId) return;
+    dbg('■ EL fine ' + section);
+    _acSource = null;
+    _currentSection = null;
+    _setAllUI(false);
+  };
+
+  src.start(0);
+  dbg('▶ EL OK ' + section, '#5a8a5a');
 }
 
-function speakApprWithSystem(text) {
+// ── Fallback speechSynthesis ──
+function _speakSys(text, section, speakId) {
   const synth = window.speechSynthesis;
-  if (!synth) { hideApprAudioBar(); return; }
-  _stopSilentLoop();
+  if (!synth) { _setAllUI(false); return; }
   synth.cancel();
-  const voices = synth.getVoices();
+
   function _do(voices) {
+    if (speakId !== _currentSpeakId) return;
     const itV = voices.find(v => v.name === 'Alice')
              || voices.find(v => v.lang === 'it-IT' && v.localService)
              || voices.find(v => v.lang.startsWith('it'));
+    if (itV) dbg('sys voce: ' + itV.name, '#5a8a5a');
     const u = new SpeechSynthesisUtterance(text.replace(/\n/g, '. ').trim());
     if (itV) u.voice = itV;
     u.lang = 'it-IT'; u.rate = 0.88; u.pitch = 1.0; u.volume = 1.0;
-    let keepAlive = null;
+    let ka = null;
     u.onstart = () => {
-      keepAlive = setInterval(() => { if (synth.paused) synth.resume(); }, 5000);
+      if (speakId !== _currentSpeakId) { synth.cancel(); return; }
+      _currentSection = section;
+      _setAllUI(true, section);
+      ka = setInterval(() => { if (synth.paused) synth.resume(); }, 5000);
     };
     u.onend = () => {
-      if (keepAlive) { clearInterval(keepAlive); keepAlive = null; }
-      _restartSilentLoop();
-      hideApprAudioBar();
+      if (ka) clearInterval(ka);
+      if (speakId !== _currentSpeakId) return;
+      _currentSection = null; _setAllUI(false);
     };
     u.onerror = () => {
-      if (keepAlive) { clearInterval(keepAlive); keepAlive = null; }
-      _restartSilentLoop();
-      hideApprAudioBar();
+      if (ka) clearInterval(ka);
+      _currentSection = null; _setAllUI(false);
     };
     synth.speak(u);
   }
+
+  const voices = synth.getVoices();
   if (voices.length > 0) { _do(voices); }
   else {
     let done = false;
     synth.onvoiceschanged = () => { if (done) return; done=true; synth.onvoiceschanged=null; _do(synth.getVoices()); };
-    setTimeout(() => { if (done) return; done=true; synth.onvoiceschanged=null; _do(synth.getVoices()); }, 1200);
+    setTimeout(() => { if (done) return; done=true; synth.onvoiceschanged=null; _do(synth.getVoices()); }, 1000);
   }
 }
 
-function speakText(text) {
-  dbg('speakText()');
-  if (S.muted) { dbg('muted', '#f0a030'); return; }
-  if (!text) { dbg('no text', '#c03030'); return; }
-
-  if (!S._audioEl) S._audioEl = document.getElementById('strati-audio');
-  const a = S._audioEl;
-
-  // CRITICO: ferma sempre il silent loop prima di qualsiasi audio
-  _stopSilentLoop();
-  if (window.speechSynthesis) window.speechSynthesis.cancel();
-
-  if (S.elKey) {
-    dbg('EL key → fetch blob...');
+function _clearLoading(section) {
+  if (section === 'main') {
     const btn = document.getElementById('audio-btn');
-    if (btn) { btn.classList.add('loading'); document.getElementById('audio-lbl').textContent = 'Sintetizzando...'; }
-
-    fetch('https://api.elevenlabs.io/v1/text-to-speech/' + S.elVoiceId + '/stream', {
-      method: 'POST',
-      headers: { 'xi-api-key': S.elKey, 'Content-Type': 'application/json', 'Accept': 'audio/mpeg' },
-      body: JSON.stringify({
-        text: text.replace(/\n\n+/g, '\n').trim().slice(0, 500),
-        model_id: 'eleven_multilingual_v2',
-        voice_settings: { stability: 0.5, similarity_boost: 0.78, style: 0.3, use_speaker_boost: true }
-      })
-    })
-    .then(async r => {
-      dbg('EL HTTP ' + r.status);
-      if (!r.ok) {
-        if (r.status === 401 || r.status === 403) {
-          try {
-            const j = await r.json().catch(() => ({}));
-            const reason = j?.detail?.status || 'invalid_key';
-            dbg('EL bloccato: ' + reason + ' → disabilitato, uso sistema', '#f0a030');
-          } catch(e) {}
-          S.elKey = null;
-        }
-        throw new Error('HTTP ' + r.status);
-      }
-      return r.blob();
-    })
-    .then(blob => {
-      if (btn) btn.classList.remove('loading');
-      dbg('blob ' + Math.round(blob.size/1024) + 'KB → play su elem DOM');
-      const url = URL.createObjectURL(blob);
-      S._blobUrl = url;
-      a.loop = false; a.volume = 1;
-      a.onplay = () => { dbg('▶ EL OK', '#5a8a5a'); setAudioUI(true); };
-      a.onended = () => {
-        dbg('■ EL fine'); setAudioUI(false);
-        if (S._blobUrl) { URL.revokeObjectURL(S._blobUrl); S._blobUrl = null; }
-        a.onplay = null; a.onended = null; a.onerror = null;
-        _restartSilentLoop();
-      };
-      a.onerror = () => { dbg('✗ EL onerror → Alice', '#c03030'); speakWithSystem(text); };
-      a.src = url; a.load();
-      a.play()
-        .then(() => dbg('✓ EL play OK', '#5a8a5a'))
-        .catch(e => { dbg('✗ play rifiutato: ' + e.name + ' → Alice', '#c03030'); speakWithSystem(text); });
-    })
-    .catch(err => {
-      if (btn) btn.classList.remove('loading');
-      dbg('✗ fetch: ' + err.message, '#c03030');
-      speakWithSystem(text);
-    });
+    if (btn) { btn.classList.remove('loading'); document.getElementById('audio-lbl').textContent = 'Ascolta narrazione'; }
   } else {
-    dbg('no EL key → sistema');
-    speakWithSystem(text);
+    const b = document.getElementById('play-' + section);
+    if (b) b.classList.remove('loading');
   }
 }
+
+// ── API pubblica ──
+function speak(text, section) {
+  if (S.muted || !text) return;
+  // Se stessa sezione è in play → stop
+  if (_currentSection === section && S.isSpeaking) { stopAllAudio(); return; }
+  // Ferma qualsiasi audio precedente
+  stopAllAudio();
+  const id = _currentSpeakId;
+  // Sblocca AudioContext SINCRONAMENTE nel tap (fondamentale iOS)
+  _resumeAC();
+  if (S.elKey) {
+    _speakEL(text, section, id);
+  } else {
+    _speakSys(text, section, id);
+  }
+}
+
+// ── Compatibilità con vecchie chiamate ──
+function speakText(text) { speak(text, 'main'); }
+function stopAudio() { stopAllAudio(); }
+function setAudioUI(on) { _setAllUI(on, on ? (_currentSection || 'main') : null); }
+function startSilentLoop() { _resumeAC(); S._audioReady = true; dbg('AC sbloccato', '#5a8a5a'); }
+function _stopSilentLoop() {}
+function _restartSilentLoop() {}
 
 function toggleMute() {
   S.muted = !S.muted;
   const btn = document.getElementById('mute-btn');
   btn.textContent = S.muted ? '🔇' : '🔊';
   btn.classList.toggle('muted', S.muted);
-  if (S.muted) { stopAudio(); setAudioUI(false); }
+  if (S.muted) stopAllAudio();
 }
 
+// ── Narrazione principale ──
 function speakCurrent() {
-  dbg('tap ▶ — speaking=' + S.isSpeaking + ' elKey=' + !!S.elKey + ' audioReady=' + !!S._audioReady + ' text=' + !!S.currentText);
-  if (S.isSpeaking) { stopAudio(); return; }
   if (!S.currentText || S.muted) return;
-
-  // Se il silent loop non è ancora attivo (primo tap), avviarlo e riprovare
-  if (!S._audioReady && !S._audioStarting) {
-    S._audioStarting = true;
-    dbg('→ avvio silent loop al primo tap');
-    const a = document.getElementById('strati-audio');
-    S._audioEl = a;
-    a.src = SILENT_WAV; a.loop = true; a.volume = 0;
-    a.play()
-      .then(() => {
-        S._audioReady = true; S._audioStarting = false;
-        dbg('✓ silent loop pronto — avvio TTS', '#5a8a5a');
-        speakText(S.currentText);
-      })
-      .catch(e => {
-        S._audioStarting = false;
-        dbg('✗ silent loop fallito al tap: ' + e.message + ' — provo comunque TTS', '#f0a030');
-        speakText(S.currentText);
-      });
-    return;
-  }
-
-  speakText(S.currentText);
+  speak(S.currentText, 'main');
 }
+
+// ── Sezione approfondimento ──
+function speakSection(key) {
+  const el = document.getElementById('app-' + key + '-text');
+  if (!el) return;
+  const text = el.innerText || el.textContent || '';
+  if (!text.trim()) return;
+  speak(text.trim(), key);
+}
+
+// ── Approfondimento: rimuovi bar e funzioni deprecate ──
+function showApprAudioBar() {}
+function hideApprAudioBar() {}
+function toggleApprAudio() {}
+function stopApprAudio() { stopAllAudio(); }
+function speakApprText(text) {} // non più usata — ogni sezione ha il suo play
+function speakApprWithSystem(text) {}
+function speakWithSystem(text) { _speakSys(text, 'main', _currentSpeakId); }
 
 // ══════════════════════════════════════════════
 // APPROFONDISCI
@@ -1269,16 +1182,7 @@ Approfondisci con dati storici precisi.`;
     }
 
     btn.classList.add('done'); // nasconde il pulsante
-
-    // Audio: aspetta la fine del typewrite della prima sezione, poi legge tutto
-    if (!S.muted && fullAppText.trim()) {
-      const firstSectionLen = (data.cronologia || data.personaggi || data.connessioni || data.aneddoti || '').length;
-      const estimatedReadTime = firstSectionLen * 18 + 500; // ms per leggere prima sezione
-      setTimeout(() => {
-        showApprAudioBar(fullAppText.trim());
-        speakApprText(fullAppText.trim());
-      }, Math.max(estimatedReadTime, 1500));
-    }
+    // Ogni sezione ha il proprio pulsante ▶ — nessun autoplay
 
   } catch(e) {
     btn.classList.remove('loading');
