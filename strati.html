@@ -443,6 +443,8 @@
 
 <!-- SPLASH -->
 <div id="splash">
+  <!-- form fittizio per bloccare autocomplete Safari -->
+  <form style="display:none" autocomplete="off"><input type="password"></form>
   <!-- PULSANTE IN CIMA -->
   <div style="width:100%;max-width:340px;display:flex;flex-direction:column;align-items:center;gap:0.5rem;margin-bottom:1.5rem;">
     <button class="start-btn" id="start-btn" style="margin-top:0;width:100%;letter-spacing:0.2em;" onclick="unifiedStart()">
@@ -470,7 +472,7 @@
   <div class="key-block">
     <span class="key-lbl">✦ Groq API Key — necessaria per la narrazione</span>
     <div class="key-row">
-      <input class="key-inp" id="gem-key" type="password" placeholder="Incolla la tua Groq key..." autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false">
+      <input class="key-inp" id="gem-key" type="password" placeholder="Incolla la tua Groq key..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
       <button class="key-btn" onclick="testOpenAI()">Verifica</button>
     </div>
     <div class="key-st req" id="gem-st">→ Ottienila gratis su console.groq.com</div>
@@ -480,7 +482,7 @@
   <div class="key-block">
     <span class="key-lbl">🎙 ElevenLabs API Key — voce narrante</span>
     <div class="key-row">
-      <input class="key-inp" id="el-key" type="password" placeholder="Incolla la tua ElevenLabs key..." autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false">
+      <input class="key-inp" id="el-key" type="password" placeholder="Incolla la tua ElevenLabs key..." autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
       <button class="key-btn" onclick="testEL()">Verifica</button>
     </div>
     <div class="key-st req" id="el-st">→ Ottienila su elevenlabs.io</div>
@@ -669,7 +671,7 @@
 <audio id="strati-audio" preload="none" style="display:none"></audio>
 
 <!-- DEBUG AUDIO PANEL -->
-<div id="debug-panel" style="position:fixed;bottom:0;left:0;right:0;background:#0a0a08;border-top:2px solid #c9a84c;padding:0.6rem 1rem;z-index:9999;font-family:monospace;font-size:0.68rem;color:#c9a84c;max-height:160px;overflow-y:auto;">
+<div id="debug-panel" style="display:none;position:fixed;bottom:0;left:0;right:0;background:#0a0a08;border-top:2px solid #c9a84c;padding:0.6rem 1rem;z-index:9999;font-family:monospace;font-size:0.68rem;color:#c9a84c;max-height:160px;overflow-y:auto;">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.3rem;">
     <b>🔊 AUDIO DEBUG</b>
     <span style="cursor:pointer;color:#888;padding:0 0.3rem;" onclick="this.closest('#debug-panel').style.display='none'">✕</span>
@@ -1578,9 +1580,11 @@ const BIO_KEY = 'strati_bio_v1';
 async function bioInit() {
   const saved = localStorage.getItem(BIO_KEY);
   if (saved) {
-    document.getElementById('start-btn-label').textContent = '🔑 Usa Passkey';
+    document.getElementById('start-btn-label').textContent = '▶ Riprendi camminata';
     document.getElementById('manual-start-link').style.display = 'flex';
     document.getElementById('manual-start-link').style.gap = '0';
+    // Pre-carica le chiavi silenziosamente
+    try { await bioLoadSilent(); } catch(e) {}
   } else {
     document.getElementById('start-btn-label').textContent = 'Inizia a camminare';
   }
@@ -1597,8 +1601,8 @@ async function unifiedStart() {
   const st = document.getElementById('unified-st');
 
   if (saved) {
-    // Ha chiavi salvate → carica con passkey poi parte
-    st.textContent = 'Autenticazione...';
+    // Ha chiavi salvate → carica e parte
+    st.textContent = 'Caricamento chiavi...';
     st.className = 'key-st';
     try {
       await bioLoadSilent();
@@ -1607,7 +1611,7 @@ async function unifiedStart() {
       st.className = 'key-st ok';
       setTimeout(() => startApp(), 400);
     } catch(e) {
-      st.textContent = '✗ ' + (e.message || 'Autenticazione fallita');
+      st.textContent = '✗ ' + (e.message || 'Caricamento fallito');
       st.className = 'key-st err';
     }
   } else {
@@ -1617,11 +1621,9 @@ async function unifiedStart() {
       st.className = 'key-st err';
       return;
     }
-    // Tenta salvataggio silenzioso con passkey
+    // Salva chiavi in localStorage per la prossima volta
     try {
       await bioSaveSilent();
-      st.textContent = '🔑 Chiavi salvate per la prossima volta';
-      st.className = 'key-st ok';
     } catch(e) { /* silenzioso se fallisce */ }
     setTimeout(() => startApp(), 200);
   }
@@ -1719,7 +1721,7 @@ async function bioSaveSilent() {
     ct: btoa(String.fromCharCode(...new Uint8Array(enc)))
   };
   localStorage.setItem(BIO_KEY, JSON.stringify(data));
-  document.getElementById('start-btn-label').textContent = '🔑 Usa Passkey';
+  document.getElementById('start-btn-label').textContent = '▶ Riprendi camminata';
   document.getElementById('manual-start-link').style.display = 'flex';
 }
 
