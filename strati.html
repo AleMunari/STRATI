@@ -671,6 +671,7 @@
 </div>
 
 <div id="flash"></div>
+<audio id="strati-audio" preload="none" style="display:none"></audio>
 
 <script>
 // ══════════════════════════════════════════════
@@ -683,9 +684,11 @@ const S = {
   gpsReady: false,
   lastPos: null,
   currentPos: null,
+  anchorPos: null,
   totalDist: 0,
   lastFragAt: -9999,
   lastFragTime: 0,
+  lastFragPos: null,
   fragCount: 0,
   currentText: '',
   isSpeaking: false,
@@ -841,15 +844,34 @@ function speakWithSystem(text) {
 
 function playBlob(url) {
   stopAudio();
-  const a = new Audio(url);
-  a._blobUrl = url; S.currentAudio = a;
-  a.onplay=()=>setAudioUI(true);
-  a.onended=a.onerror=()=>{ setAudioUI(false); URL.revokeObjectURL(url); S.currentAudio=null; };
-  a.play();
+  // Riusa sempre lo stesso elemento audio DOM (sbloccato al gesto startApp)
+  if (!S._audioEl) {
+    S._audioEl = document.getElementById('strati-audio');
+  }
+  const a = S._audioEl;
+  a._blobUrl = url;
+  S.currentAudio = a;
+  a.onplay = () => setAudioUI(true);
+  a.onended = a.onerror = () => {
+    setAudioUI(false);
+    if (a._blobUrl) { URL.revokeObjectURL(a._blobUrl); a._blobUrl = null; }
+    S.currentAudio = null;
+  };
+  a.src = url;
+  const p = a.play();
+  if (p && p.catch) p.catch(e => {
+    console.warn('Audio play failed:', e);
+    // Fallback a voce di sistema
+    speakWithSystem(S.currentText || '');
+  });
 }
 
 function stopAudio() {
-  if (S.currentAudio) { S.currentAudio.pause(); if(S.currentAudio._blobUrl) URL.revokeObjectURL(S.currentAudio._blobUrl); S.currentAudio=null; }
+  if (S.currentAudio) {
+    S.currentAudio.pause();
+    if (S.currentAudio._blobUrl) { URL.revokeObjectURL(S.currentAudio._blobUrl); S.currentAudio._blobUrl = null; }
+    S.currentAudio = null;
+  }
   if (S.synth) S.synth.cancel();
 }
 
@@ -882,7 +904,18 @@ function toggleMute() {
 
 function speakCurrent() {
   if (S.isSpeaking) { stopAudio(); setAudioUI(false); return; }
-  if (S.currentText && !S.muted) speakText(S.currentText);
+  if (!S.currentText || S.muted) return;
+  // iOS: assicuriamoci che il contesto audio sia sbloccato (siamo in un onclick)
+  if (!S._audioCtxUnlocked) {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const buf = ctx.createBuffer(1,1,22050);
+      const src = ctx.createBufferSource();
+      src.buffer=buf; src.connect(ctx.destination); src.start(0);
+      S._audioCtxUnlocked = true;
+    } catch(e) {}
+  }
+  speakText(S.currentText);
 }
 
 // ══════════════════════════════════════════════
@@ -993,18 +1026,25 @@ function onPos(pos) {
   }
 
   if (!S.gpsReady) {
-    S.gpsReady=true; S.lastPos={lat,lon};
+    S.gpsReady=true; S.lastPos={lat,lon}; S.anchorPos={lat,lon};
     S.lastAddrPos={lat,lon};
     fetchAddress(lat, lon);
     triggerFrag(lat,lon,'primo_fix'); return;
   }
 
   const delta = haversine(S.lastPos.lat,S.lastPos.lon,lat,lon);
-  if (delta>2 && delta<600) {
-    S.totalDist+=delta; S.lastPos={lat,lon};
-    const spd=typeof speed==='number'&&speed>=0?speed:delta/3;
+  // Solo movimenti reali: minimo 8m, max 600m (anti-teleport)
+  // E controlliamo anche rispetto all'anchor per capire se ci si è spostati davvero
+  const anchorDelta = S.anchorPos ? haversine(S.anchorPos.lat,S.anchorPos.lon,lat,lon) : delta;
+  
+  if (delta > 8 && delta < 600 && anchorDelta > 5) {
+    S.totalDist += delta;
+    S.lastPos = {lat,lon};
+    // Aggiorna anchor solo se ci si sposta stabilmente (>15m dall'anchor)
+    if (anchorDelta > 15) S.anchorPos = {lat,lon};
+    const spd = typeof speed==='number' && speed>=0 ? speed : delta/3;
     S.speedSamples.push(spd); if(S.speedSamples.length>8) S.speedSamples.shift();
-    // Aggiorna indirizzo strip ogni ~30m di spostamento
+    // Aggiorna indirizzo strip ogni ~30m di spostamento reale
     if (S.lastAddrPos) {
       const addrDelta = haversine(S.lastAddrPos.lat, S.lastAddrPos.lon, lat, lon);
       if (addrDelta > 30) { S.lastAddrPos={lat,lon}; fetchAddress(lat, lon); }
@@ -1038,10 +1078,20 @@ function checkTrigger(lat,lon) {
 
 function triggerFrag(lat,lon,reason) {
   if (S.isGenerating) return;
-  // Cooldown minimo 90 secondi tra frammenti (evita riattivazione per oscillazioni GPS)
   const now = Date.now();
-  if (reason !== 'primo_fix' && now - S.lastFragTime < 90000) return;
-  S.lastFragAt=S.totalDist; S.lastFragTime=now; S.fragCount++;
+  if (reason !== 'primo_fix') {
+    // Cooldown temporale: minimo 3 minuti tra frammenti
+    if (now - S.lastFragTime < 180000) return;
+    // Cooldown spaziale: deve essersi spostato almeno 30m dall'ultimo frammento
+    if (S.lastFragPos) {
+      const distFromLast = haversine(S.lastFragPos.lat, S.lastFragPos.lon, lat, lon);
+      if (distFromLast < 30) return;
+    }
+  }
+  S.lastFragAt = S.totalDist;
+  S.lastFragTime = now;
+  S.lastFragPos = {lat, lon};
+  S.fragCount++;
   generateFrag(lat,lon,reason);
 }
 
@@ -1279,9 +1329,10 @@ async function generateFrag(lat,lon,reason) {
     addHistory({lat,lon,place:cached.place,epoch:cached.epoch,text:cached.text});
     addMapMarker(lat,lon,cached.place,S.fragCount);
     doFlash(); vibrate([60,30,60]);
+    // Audio subito (iOS richiede che sia il più vicino possibile all'avvio della generazione)
+    if (!S.muted && cached.text) speakText(cached.text);
     typewrite(cached.text, document.getElementById('story-text'), 25, ()=>{
       document.getElementById('approfondisci-btn').style.display='flex';
-      if (!S.muted) setTimeout(()=>speakText(cached.text), 400);
     });
     S.isGenerating=false;
     return;
@@ -1290,12 +1341,41 @@ async function generateFrag(lat,lon,reason) {
   let histData={wikiData:[],osmData:[],sources:[]};
   try { histData=await fetchHistoricalData(lat,lon); } catch(e){}
 
+  // ── FILTRA: tieni solo dati entro 120m. Se nulla è vicino, zona non documentata ──
+  const CLOSE_RADIUS = 120;
+  histData.wikiData = histData.wikiData.filter(w => w.dist <= CLOSE_RADIUS);
+  // rifiltra sources per tenere solo quelle dei wiki vicini
+  const closeTitles = new Set(histData.wikiData.map(w=>w.title));
+  histData.sources = histData.sources.filter(s => closeTitles.has(s.label.replace(/ \(IT\)|\(EN\)|\(Wikidata\)/g,'').trim()) || histData.osmData.length > 0);
+
+  const noData = histData.wikiData.length===0 && histData.osmData.length===0;
+  const h=new Date().getHours();
+  const tod=h<6?'notte':h<12?'mattina':h<18?'pomeriggio':'sera';
+  const currentAddr = document.getElementById('frag-address').textContent || document.getElementById('addr-strip').textContent || '';
+
+  // ── NESSUN DATO VICINO: mostra messaggio onesto, NIENTE Groq, NIENTE attrazioni lontane ──
+  if (noData) {
+    const addr = currentAddr || 'questa zona';
+    const noDataText = `Sei in ${addr}.\n\nIn quest'area non sono disponibili informazioni storiche documentate nelle fonti aperte.\n\nContinua a camminare.`;
+    S.currentText = noDataText;
+    document.getElementById('gen-wrap').classList.remove('on');
+    document.getElementById('story-text').classList.add('no-data');
+    document.getElementById('frag-place').textContent = addr;
+    document.getElementById('epoch-val').textContent = '—';
+    typewrite(noDataText, document.getElementById('story-text'), 22);
+    addHistory({lat, lon, place: addr, epoch:'—', text: noDataText});
+    addMapMarker(lat, lon, addr, S.fragCount);
+    // Non parla per messaggi "nessun dato"
+    S.isGenerating = false;
+    return;
+  }
+
   const systemPrompt = `Sei una guida narrativa storica che racconta la storia dei luoghi mentre qualcuno cammina.
-Ricevi dati reali da Wikipedia, Wikidata e OpenStreetMap e li trasformi in narrazione coinvolgente.
+Ricevi dati reali da Wikipedia e OpenStreetMap e li trasformi in narrazione coinvolgente.
 
 FORMATO — rispondi SOLO con JSON valido, nient'altro:
 {
-  "place": "Nome specifico del luogo, via o quartiere dove si trova l'utente (NON il nome di un'attrazione vicina)",
+  "place": "Nome della via, piazza o zona dove si trova fisicamente l'utente (NON il nome di un monumento o attrazione)",
   "epoch": "Epoca principale (es: 'Medioevo', 'XIX secolo', 'anni Settanta', 'oggi')",
   "tone": "uno tra: drammatico | documentaristico | poetico | distaccato | solenne",
   "text": "Testo narrativo completo"
@@ -1308,68 +1388,31 @@ REGOLE TONO:
 - Storia economica, politica, quotidiana → documentaristico
 - Paesaggi, natura, memoria collettiva → poetico
 
-REGOLE TESTO:
-- Seconda persona: "Stai camminando su...", "Sotto i tuoi piedi..."
-- IMPORTANTE: L'utente si trova ESATTAMENTE alle coordinate fornite. Non dire che è "vicino a" o "nei pressi di" un luogo se quel luogo è distante — usa la distanza reale in metri e dì "a X metri da qui si trova..."
-- I dati Wikipedia/OSM sono fonti storiche per la zona, ma il punto di vista narrativo è SEMPRE dalla posizione esatta dell'utente
-- Se un'attrazione è a 200m, dì "a duecento metri da dove ti trovi..." — non fingere che l'utente ci sia sopra
+REGOLE FONDAMENTALI:
+- L'utente è ESATTAMENTE alle coordinate date. I dati forniti sono di elementi che si trovano a quella stessa posizione (entro 120 metri).
+- NON dire "stai camminando vicino a" o "nei pressi di" — l'utente è già lì.
+- Racconta la storia del luogo come se l'utente ci stesse camminando sopra.
+- Seconda persona: "Stai camminando su...", "Sotto i tuoi piedi...", "Qui, dove ti trovi..."
 - Fatti precisi, date, nomi reali — MAI inventare
-- Se dati scarsi: dì onestamente cosa non si sa
-- 120-200 parole
-- Vai a capo spesso
-- Inizia sempre dal luogo fisico dove si trova l'utente, poi espandi nel tempo e nello spazio`;
-
-  const h=new Date().getHours();
-  const tod=h<6?'notte':h<12?'mattina':h<18?'pomeriggio':'sera';
-  const noData = histData.wikiData.length===0 && histData.osmData.length===0;
-
-  // ── NESSUN DATO: mostra messaggio onesto senza chiamare Groq ──
-  if (noData) {
-    const addr = document.getElementById('frag-address').textContent || document.getElementById('addr-strip').textContent || 'questa zona';
-    // Cerca luoghi nelle vicinanze allargando il raggio su Wikipedia
-    let nearby = '';
-    try {
-      const nr = await fetch(`https://it.wikipedia.org/w/api.php?action=query&list=geosearch&gscoord=${lat}|${lon}&gsradius=2000&gslimit=3&format=json&origin=*`);
-      const nd = await nr.json();
-      const places = (nd.query?.geosearch || []).filter(p => p.dist > 100);
-      if (places.length > 0) {
-        nearby = '\n\nNelle vicinanze:\n' + places.map(p => `→ ${p.title} (a ~${Math.round(p.dist)}m)`).join('\n');
-      }
-    } catch(e) {}
-
-    const noDataText = `In questa zona — ${addr} — non sono disponibili informazioni storiche documentate.${nearby}`;
-    S.currentText = noDataText;
-    document.getElementById('gen-wrap').classList.remove('on');
-    document.getElementById('story-text').classList.add('no-data');
-    document.getElementById('frag-place').textContent = addr || 'Zona non mappata';
-    document.getElementById('epoch-val').textContent = '—';
-    typewrite(noDataText, document.getElementById('story-text'), 22, ()=>{
-      document.getElementById('approfondisci-btn').style.display='none'; // non ha senso approfondire
-    });
-    addHistory({lat, lon, place: addr || 'Zona non mappata', epoch:'—', text: noDataText});
-    addMapMarker(lat, lon, addr || 'Zona non mappata', S.fragCount);
-    S.isGenerating = false;
-    return;
-  }
+- 120-200 parole, vai a capo spesso`;
 
   let wikiStr='';
   if (histData.wikiData.length>0) {
-    wikiStr='\nDATA WIKIPEDIA:\n'+histData.wikiData.map(w=>`— ${w.title} (a ${w.dist}m):\n${w.extract}`).join('\n\n');
+    wikiStr='\nFONTI WIKIPEDIA (tutti entro 120m dalla posizione utente):\n'+histData.wikiData.map(w=>`— ${w.title} (a ${w.dist}m):\n${w.extract}`).join('\n\n');
   }
   let osmStr='';
   if (histData.osmData.length>0) {
-    osmStr='\nDATA OPENSTREETMAP:\n'+histData.osmData.map(o=>`— ${o.name} (${o.type})${o.startDate?' · '+o.startDate:''}${o.description?' · '+o.description:''}`).join('\n');
+    osmStr='\nFONTI OPENSTREETMAP:\n'+histData.osmData.map(o=>`— ${o.name} (${o.type})${o.startDate?' · '+o.startDate:''}${o.description?' · '+o.description:''}`).join('\n');
   }
 
-  const currentAddr = document.getElementById('frag-address').textContent || document.getElementById('addr-strip').textContent || '';
-  const userPrompt=`POSIZIONE ESATTA UTENTE: ${lat.toFixed(5)}°N, ${lon.toFixed(5)}°E${currentAddr ? '\nIndirizzo: ' + currentAddr : ''}
-Distanza percorsa: ${Math.round(S.totalDist)}m · Ora: ${timeStr()} (${tod}) · Luogo n.${S.fragCount}
+  const userPrompt=`POSIZIONE UTENTE: ${lat.toFixed(5)}°N, ${lon.toFixed(5)}°E
+Indirizzo: ${currentAddr || '(non disponibile)'}
+Ora: ${timeStr()} (${tod}) · Frammento n.${S.fragCount}
 
-NOTA: i dati sotto sono di luoghi nella zona con la loro distanza in metri dall'utente. Usali come contesto storico ma racconta sempre dalla posizione esatta dell'utente.
 ${wikiStr}
 ${osmStr}
 
-Genera la narrazione ricordando che l'utente è alle coordinate indicate, non necessariamente dentro o sopra i luoghi citati.`;
+Genera la narrazione per questa posizione esatta.`;
 
   try {
     const parsed = await callOpenAI(systemPrompt, userPrompt);
@@ -1377,7 +1420,7 @@ Genera la narrazione ricordando che l'utente è alle coordinate indicate, non ne
     S.currentText = parsed.text || '';
     S.currentSources = histData.sources;
 
-    document.getElementById('frag-place').textContent = parsed.place || 'Luogo';
+    document.getElementById('frag-place').textContent = parsed.place || currentAddr || 'Luogo';
     document.getElementById('epoch-val').textContent = parsed.epoch || '—';
     if (parsed.epoch) S.epochsVisited.add(parsed.epoch);
 
@@ -1389,15 +1432,18 @@ Genera la narrazione ricordando che l'utente è alle coordinate indicate, non ne
     // Salva in cache
     saveCache(cacheKey, { place:parsed.place, epoch:parsed.epoch, text:parsed.text, sources:histData.sources });
 
-    addHistory({lat,lon,place:parsed.place,epoch:parsed.epoch,text:parsed.text});
-    addMapMarker(lat,lon,parsed.place,S.fragCount);
+    addHistory({lat,lon,place:parsed.place||currentAddr,epoch:parsed.epoch,text:parsed.text});
+    addMapMarker(lat,lon,parsed.place||currentAddr,S.fragCount);
     doFlash(); vibrate([60,30,60]);
 
     document.getElementById('gen-wrap').classList.remove('on');
+
+    // ── AUDIO: parte subito (non aspetta il typewrite — iOS blocca audio in callback async) ──
+    if (!S.muted && parsed.text) speakText(parsed.text);
+
     const speed=({drammatico:20,documentaristico:26,poetico:30,distaccato:22,solenne:28})[parsed.tone]||25;
     typewrite(parsed.text, document.getElementById('story-text'), speed, ()=>{
       document.getElementById('approfondisci-btn').style.display='flex';
-      if (!S.muted) setTimeout(()=>speakText(parsed.text), 400);
     });
 
   } catch(e) {
@@ -1484,19 +1530,33 @@ function startApp() {
   if (!S.openaiKey) {
     alert('Inserisci e verifica la Groq API Key prima di iniziare.'); return;
   }
-  // iOS audio unlock: crea e riproduce un audio silenzioso per sbloccare l'AudioContext
+
+  // ── SBLOCCO AUDIO iOS ── (deve essere eseguito SINCRONO dentro l'onclick)
+  // 1. Elemento <audio> DOM: play silenzioso per sbloccarlo
+  const audioEl = document.getElementById('strati-audio');
+  S._audioEl = audioEl;
+  audioEl.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+  const unlockPlay = audioEl.play();
+  if (unlockPlay) unlockPlay.then(()=>{ audioEl.pause(); audioEl.src=''; }).catch(()=>{});
+
+  // 2. AudioContext per ElevenLabs blob
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const buf = ctx.createBuffer(1,1,22050);
     const src = ctx.createBufferSource();
-    src.buffer = buf; src.connect(ctx.destination); src.start(0);
+    src.buffer=buf; src.connect(ctx.destination); src.start(0);
     S._audioCtxUnlocked = true;
   } catch(e) {}
-  // Unlock speechSynthesis su iOS
+
+  // 3. SpeechSynthesis pre-carica voci
   if (window.speechSynthesis) {
-    const u = new SpeechSynthesisUtterance('');
+    window.speechSynthesis.getVoices();
+    // Parla testo vuoto per sbloccare su iOS
+    const u = new SpeechSynthesisUtterance(' ');
+    u.volume = 0; u.rate = 1;
     window.speechSynthesis.speak(u);
   }
+
   S.startTime = new Date();
   startTracking();
   document.getElementById('splash').classList.add('hidden');
